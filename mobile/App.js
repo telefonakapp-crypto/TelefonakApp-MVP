@@ -1,0 +1,165 @@
+import React, { useState, useEffect } from 'react';
+import { NavigationContainer, CommonActions } from '@react-navigation/native';
+import { createStackNavigator } from '@react-navigation/stack';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
+import { I18nManager } from 'react-native';
+import { ThemeProvider } from './src/context/ThemeContext';
+import { LanguageProvider, useLanguage } from './src/context/LanguageContext';
+
+const API_BASE_URL = 'https://yun-nonerrant-joaquina.ngrok-free.dev/api';
+import SplashScreen from './src/screens/SplashScreen';
+import OnboardingScreen from './src/screens/OnboardingScreen';
+import AuthChoiceScreen from './src/screens/AuthChoiceScreen';
+import LoginScreen from './src/screens/LoginScreen';
+import SignUpPhoneScreen from './src/screens/SignUpPhoneScreen';
+import OTPScreen from './src/screens/OTPScreen';
+import RegisterScreen from './src/screens/RegisterScreen';
+import HomeScreen from './src/screens/HomeScreen';
+import ProfileScreen from './src/screens/ProfileScreen';
+import CreateListingScreen from './src/screens/CreateListingScreen';
+import ListingDetailsScreen from './src/screens/ListingDetailsScreen';
+import MyListingsScreen from './src/screens/MyListingsScreen';
+import EditProfileScreen from './src/screens/EditProfileScreen';
+import SettingsScreen from './src/screens/SettingsScreen';
+import AdminDashboardScreen from './src/screens/AdminDashboardScreen';
+import NotificationsScreen from './src/screens/NotificationsScreen';
+import UserGuideScreen from './src/screens/UserGuideScreen';
+import PrivacyPolicyScreen from './src/screens/PrivacyPolicyScreen';
+import TermsOfUseScreen from './src/screens/TermsOfUseScreen';
+import HelpScreen from './src/screens/HelpScreen';
+import AdminAdsScreen from './src/screens/AdminAdsScreen';
+
+const Stack = createStackNavigator();
+
+export default function App() {
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminCheckComplete, setAdminCheckComplete] = useState(false);
+
+  useEffect(() => {
+    const initializeApp = async () => {
+      // Show splash screen for minimum 2.5 seconds (as per original design)
+      const startTime = Date.now();
+      
+      try {
+        const onboarding = await AsyncStorage.getItem('hasSeenOnboarding');
+        const token = await AsyncStorage.getItem('authToken');
+        
+        setHasSeenOnboarding(onboarding === 'true');
+        setIsAuthenticated(!!token);
+        
+        // Check if user is admin
+        if (token) {
+          try {
+            const response = await axios.get(`${API_BASE_URL}/user/profile`, {
+              headers: {
+                Authorization: `Bearer ${token}`,
+              },
+            });
+            const adminStatus = response.data.user?.is_admin === true;
+            console.log('Admin status check:', adminStatus, 'User:', response.data.user?.first_name);
+            setIsAdmin(adminStatus);
+          } catch (error) {
+            console.error('Error checking admin status:', error);
+            setIsAdmin(false);
+          }
+        } else {
+          setIsAdmin(false);
+        }
+        setAdminCheckComplete(true);
+      } catch (error) {
+        console.error('Error checking auth status:', error);
+        setAdminCheckComplete(true);
+      }
+
+      // Ensure splash screen shows for at least 2.5 seconds
+      const elapsed = Date.now() - startTime;
+      const remainingTime = Math.max(0, 2500 - elapsed);
+      
+      setTimeout(() => {
+        setIsLoading(false);
+      }, remainingTime);
+    };
+
+    initializeApp();
+  }, []);
+
+  if (isLoading || !adminCheckComplete) {
+    return <SplashScreen />;
+  }
+
+  const getInitialRoute = () => {
+    if (!hasSeenOnboarding) return 'Onboarding';
+    if (!isAuthenticated) return 'AuthChoice';
+    // Don't auto-redirect to AdminDashboard - let admins access Home too
+    // Admins can access AdminDashboard from Profile screen
+    return 'Home';
+  };
+
+  return (
+    <LanguageProvider>
+      <ThemeProvider>
+        <AppNavigatorWrapper initialRoute={getInitialRoute()} />
+      </ThemeProvider>
+    </LanguageProvider>
+  );
+}
+
+function AppNavigatorWrapper({ initialRoute }) {
+  const { isRTL } = useLanguage();
+  
+  // Default screen options
+  const defaultScreenOptions = {
+    headerShown: false,
+    gestureDirection: isRTL ? 'horizontal-inverted' : 'horizontal',
+  };
+  
+  return (
+    <NavigationContainer>
+      <Stack.Navigator 
+        initialRouteName={initialRoute}
+        screenOptions={defaultScreenOptions}
+      >
+        <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+        <Stack.Screen name="AuthChoice" component={AuthChoiceScreen} />
+        <Stack.Screen name="Login" component={LoginScreen} />
+        <Stack.Screen name="SignUpPhone" component={SignUpPhoneScreen} />
+        <Stack.Screen 
+          name="OTP" 
+          component={OTPScreen}
+          options={{ ...defaultScreenOptions, gestureEnabled: false }}
+        />
+        <Stack.Screen 
+          name="Register" 
+          component={RegisterScreen}
+          options={{ ...defaultScreenOptions, gestureEnabled: false }}
+        />
+        <Stack.Screen 
+          name="Home" 
+          component={HomeScreen}
+          options={{ 
+            ...defaultScreenOptions,
+            gestureEnabled: false,
+            headerLeft: null,
+          }}
+        />
+        <Stack.Screen name="Profile" component={ProfileScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="CreateListing" component={CreateListingScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="ListingDetails" component={ListingDetailsScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="MyListings" component={MyListingsScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="EditProfile" component={EditProfileScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="Settings" component={SettingsScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="AdminDashboard" component={AdminDashboardScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="Notifications" component={NotificationsScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="UserGuide" component={UserGuideScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="PrivacyPolicy" component={PrivacyPolicyScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="TermsOfUse" component={TermsOfUseScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="Help" component={HelpScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="AdminAds" component={AdminAdsScreen} options={defaultScreenOptions} />
+      </Stack.Navigator>
+    </NavigationContainer>
+  );
+}
