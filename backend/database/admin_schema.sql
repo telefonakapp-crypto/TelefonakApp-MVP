@@ -1,7 +1,11 @@
 -- Add admin role to users table
 ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;
 
--- Update listings status constraint to include new statuses
+-- Standardize listing status workflow:
+-- pending → approved → sold | deleted
+-- pending → declined | deleted
+-- approved ⇄ hidden (seller hides/unhides their own listing)
+-- Valid statuses only: pending, approved, declined, sold, hidden, deleted
 -- Step 1: Drop the existing constraint first (this allows us to update invalid statuses)
 ALTER TABLE listings DROP CONSTRAINT IF EXISTS listings_status_check;
 
@@ -14,31 +18,37 @@ BEGIN
     END IF;
 END $$;
 
--- Step 3: Update any invalid statuses to 'active' (temporary fix for any rows that might have invalid status)
-UPDATE listings SET status = 'active' WHERE status IS NULL OR status NOT IN ('active', 'sold', 'deleted', 'pending', 'approved', 'declined');
-
--- Step 4: Add the new constraint with all allowed statuses
-ALTER TABLE listings ADD CONSTRAINT listings_status_check 
-    CHECK (status IN ('pending', 'approved', 'declined', 'active', 'sold', 'deleted'));
-
--- Step 5: Update existing 'active' listings to 'approved' (for backward compatibility)
--- This happens after the constraint is updated, so 'approved' is now valid
+-- Step 3: Migrate legacy 'active' status to 'approved'
 UPDATE listings SET status = 'approved' WHERE status = 'active';
 
+-- Step 4: Normalize any remaining invalid/null statuses to 'pending'
+UPDATE listings SET status = 'pending'
+WHERE status IS NULL
+   OR status NOT IN ('pending', 'approved', 'declined', 'sold', 'hidden', 'deleted');
+
+-- Step 5: Ensure column default is 'pending' for new listings
+ALTER TABLE listings ALTER COLUMN status SET DEFAULT 'pending';
+
+-- Step 6: Enforce the final allowed status set (no 'active')
+DO $$ BEGIN
+    ALTER TABLE listings ADD CONSTRAINT listings_status_check
+        CHECK (status IN ('pending', 'approved', 'declined', 'sold', 'hidden', 'deleted'));
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END $$;
+
 -- Create notifications table
+-- Column shape for existing databases and the indexes are owned by notifications_schema.sql
 CREATE TABLE IF NOT EXISTS notifications (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    listing_id INTEGER REFERENCES listings(id) ON DELETE SET NULL,
-    type VARCHAR(50) NOT NULL, -- 'listing_approved', 'listing_declined', 'listing_edited', etc.
+    related_listing_id INTEGER REFERENCES listings(id) ON DELETE SET NULL,
+    type VARCHAR(50) NOT NULL, -- 'listing_approved', 'listing_rejected', 'listing_sold', 'system', ...
     title VARCHAR(255) NOT NULL,
     message TEXT NOT NULL,
-    is_read BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create index for notifications
-CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_listings_status ON listings(status);
 

@@ -1,6 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
+const {
+  getListingDeviceName,
+  notifyListingApproved,
+  notifyListingRejected,
+} = require('../utils/notifications');
+const { TERMINAL_LISTING_STATUSES } = require('../utils/listingStatus');
 
 // Middleware to verify JWT token and check admin role
 const verifyAdmin = async (req, res, next) => {
@@ -110,226 +116,75 @@ router.get('/listings/all', verifyAdmin, async (req, res) => {
   }
 });
 
-// Approve listing
-router.post('/listings/:id/approve', verifyAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { admin_notes } = req.body;
+/**
+ * Approve and decline are the same moderation write with a different target
+ * status and notification. Terminal statuses are excluded so moderation can
+ * never reopen a completed sale or restore a deleted listing.
+ */
+const moderateListing = async (req, res, { status, notify, message }) => {
+  const { id } = req.params;
 
-    // Update listing status
+  try {
+    const existing = await pool.query('SELECT status FROM listings WHERE id = $1', [id]);
+
+    if (existing.rows.length === 0) {
+      return res.status(404).json({ error: 'Listing not found' });
+    }
+
+    if (TERMINAL_LISTING_STATUSES.includes(existing.rows[0].status)) {
+      return res.status(409).json({
+        error: `A ${existing.rows[0].status} listing can no longer be moderated`,
+      });
+    }
+
     const result = await pool.query(
-      `UPDATE listings 
-       SET status = 'approved', updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $1 
+      `UPDATE listings
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND status <> ALL($3::text[])
        RETURNING *`,
-      [id]
+      [status, id, TERMINAL_LISTING_STATUSES]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Listing not found' });
+      return res.status(409).json({ error: 'Listing status changed, please try again' });
     }
 
     const listing = result.rows[0];
 
-    // Get full listing details for notification
-    const fullListing = await pool.query(
-      `SELECT m.name as model_name, b.name as brand_name 
-       FROM listings l
-       JOIN models m ON l.model_id = m.id
-       JOIN brands b ON m.brand_id = b.id
-       WHERE l.id = $1`,
-      [id]
-    );
-
-    const listingDetails = fullListing.rows[0];
-
-    // Create notification for user
-    await pool.query(
-      `INSERT INTO notifications (user_id, listing_id, type, title, message)
-       VALUES ($1, $2, 'listing_approved', 'Listing Approved', 
-       $3)`,
-      [
-        listing.user_id, 
-        listing.id,
-        `Your listing for ${listingDetails.brand_name} ${listingDetails.model_name} has been approved and is now live!`
-      ]
-    );
-
-    res.json({ 
-      message: 'Listing approved successfully',
-      listing: listing 
+    await notify(pool, {
+      userId: listing.user_id,
+      listingId: listing.id,
+      deviceName: await getListingDeviceName(pool, listing.id),
+      reason: req.body?.reason,
     });
+
+    res.json({ message, listing });
   } catch (error) {
-    console.error('Error approving listing:', error);
-    res.status(500).json({ error: 'Failed to approve listing' });
+    console.error(`Error setting listing status to ${status}:`, error);
+    res.status(500).json({ error: `Failed to ${status === 'approved' ? 'approve' : 'decline'} listing` });
   }
-});
+};
+
+// Approve listing
+router.post('/listings/:id/approve', verifyAdmin, (req, res) =>
+  moderateListing(req, res, {
+    status: 'approved',
+    notify: notifyListingApproved,
+    message: 'Listing approved successfully',
+  })
+);
 
 // Decline listing
-router.post('/listings/:id/decline', verifyAdmin, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { reason } = req.body;
+router.post('/listings/:id/decline', verifyAdmin, (req, res) =>
+  moderateListing(req, res, {
+    status: 'declined',
+    notify: notifyListingRejected,
+    message: 'Listing declined successfully',
+  })
+);
 
-    // Update listing status
-    const result = await pool.query(
-      `UPDATE listings 
-       SET status = 'declined', updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $1 
-       RETURNING *`,
-      [id]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Listing not found' });
-    }
-
-    const listing = result.rows[0];
-
-    // Get full listing details for notification
-    const fullListing = await pool.query(
-      `SELECT m.name as model_name, b.name as brand_name 
-       FROM listings l
-       JOIN models m ON l.model_id = m.id
-       JOIN brands b ON m.brand_id = b.id
-       WHERE l.id = $1`,
-      [id]
-    );
-
-    const listingDetails = fullListing.rows[0];
-    const reasonText = reason ? ` Reason: ${reason}` : '';
-
-    // Create notification for user
-    await pool.query(
-      `INSERT INTO notifications (user_id, listing_id, type, title, message)
-       VALUES ($1, $2, 'listing_declined', 'Listing Declined', 
-       'Your listing for ${listingDetails.brand_name} ${listingDetails.model_name} has been declined.${reasonText}')`,
-      [listing.user_id, listing.id]
-    );
-
-    res.json({ 
-      message: 'Listing declined successfully',
-      listing: listing 
-    });
-  } catch (error) {
-    console.error('Error declining listing:', error);
-    res.status(500).json({ error: 'Failed to decline listing' });
-  }
-});
-
-// Get unread notification count
-router.get('/notifications/unread-count', async (req, res) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-      return res.status(401).json({ error: 'No token provided' });
-    }
-
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    const userId = decoded.userId;
-
-    const result = await pool.query(
-      `SELECT COUNT(*) as count FROM notifications 
-       WHERE user_id = $1 AND is_read = FALSE`,
-      [userId]
-    );
-
-    res.json({ count: parseInt(result.rows[0].count) });
-  } catch (error) {
-    console.error('Error fetching unread count:', error);
-    res.status(500).json({ error: 'Failed to fetch unread count' });
-  }
-});
-
-// Get notifications for current user
-router.get('/notifications', async (req, res) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-      return res.status(401).json({ error: 'No token provided' });
-    }
-
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    const userId = decoded.userId;
-
-    const result = await pool.query(
-      `SELECT * FROM notifications 
-       WHERE user_id = $1 
-       ORDER BY created_at DESC 
-       LIMIT 50`,
-      [userId]
-    );
-
-    res.json({ notifications: result.rows });
-  } catch (error) {
-    console.error('Error fetching notifications:', error);
-    res.status(500).json({ error: 'Failed to fetch notifications' });
-  }
-});
-
-// Mark notification as read
-router.put('/notifications/:id/read', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const token = req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-      return res.status(401).json({ error: 'No token provided' });
-    }
-
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    const userId = decoded.userId;
-
-    const result = await pool.query(
-      `UPDATE notifications 
-       SET is_read = TRUE 
-       WHERE id = $1 AND user_id = $2 
-       RETURNING *`,
-      [id, userId]
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Notification not found' });
-    }
-
-    res.json({ notification: result.rows[0] });
-  } catch (error) {
-    console.error('Error marking notification as read:', error);
-    res.status(500).json({ error: 'Failed to mark notification as read' });
-  }
-});
-
-// Mark all notifications as read
-router.put('/notifications/read-all', async (req, res) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1];
-    
-    if (!token) {
-      return res.status(401).json({ error: 'No token provided' });
-    }
-
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    const userId = decoded.userId;
-
-    await pool.query(
-      `UPDATE notifications 
-       SET is_read = TRUE 
-       WHERE user_id = $1 AND is_read = FALSE`,
-      [userId]
-    );
-
-    res.json({ message: 'All notifications marked as read' });
-  } catch (error) {
-    console.error('Error marking all notifications as read:', error);
-    res.status(500).json({ error: 'Failed to mark notifications as read' });
-  }
-});
+// Notification reading and mark-as-read now live in routes/notifications.js (/api/notifications),
+// since they are per-user endpoints rather than admin operations.
 
 module.exports = router;
 

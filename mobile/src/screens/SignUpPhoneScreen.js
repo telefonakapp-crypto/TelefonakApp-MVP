@@ -12,29 +12,15 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import apiClient, { API_BASE_URL } from '../utils/api';
+import { formatPhoneNumber, PHONE_NUMBER_LENGTH } from '../utils/phone';
 
 export default function SignUpPhoneScreen() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const navigation = useNavigation();
 
-  const formatPhoneNumber = (text) => {
-    // Remove all non-digits
-    const cleaned = text.replace(/\D/g, '');
-    
-    // Format as Jordanian phone number (07XXXXXXXX)
-    if (cleaned.startsWith('0')) {
-      return cleaned.slice(0, 10);
-    } else if (cleaned.startsWith('962')) {
-      return '0' + cleaned.slice(3);
-    } else if (cleaned.startsWith('7')) {
-      return '0' + cleaned;
-    }
-    return cleaned;
-  };
-
   const handleRequestOTP = async () => {
-    if (!phoneNumber || phoneNumber.length !== 10) {
+    if (!phoneNumber || phoneNumber.length !== PHONE_NUMBER_LENGTH) {
       Alert.alert('Error', 'Please enter a valid Jordanian phone number');
       return;
     }

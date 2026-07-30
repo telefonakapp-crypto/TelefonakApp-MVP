@@ -11,12 +11,17 @@ const pool = new Pool({
   password: process.env.DB_PASSWORD || '',
 });
 
+let hasLoggedConnect = false;
+
 pool.on('connect', () => {
-  console.log('Connected to PostgreSQL database');
+  if (!hasLoggedConnect) {
+    hasLoggedConnect = true;
+    console.log('[db] PostgreSQL pool ready');
+  }
 });
 
 pool.on('error', (err) => {
-  console.error('Unexpected error on idle client', err);
+  console.error('[db] Unexpected error on idle client:', err.message || err);
   process.exit(-1);
 });
 

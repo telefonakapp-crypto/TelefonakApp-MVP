@@ -1,0 +1,218 @@
+/**
+ * Notification creation. Every notification in the system is written through
+ * this module so titles, messages, and type strings stay consistent.
+ *
+ * Adding a type (offer_received, offer_accepted, ...) means adding a constant
+ * plus a builder here — no route needs to learn the table shape.
+ */
+
+const NOTIFICATION_TYPES = {
+  LISTING_APPROVED: 'listing_approved',
+  LISTING_REJECTED: 'listing_rejected',
+  LISTING_SOLD: 'listing_sold',
+  LISTING_HIDDEN: 'listing_hidden',
+  LISTING_ACTIVE: 'listing_active',
+  NEW_LISTING: 'new_listing',
+  OFFER_RECEIVED: 'offer_received',
+  OFFER_ACCEPTED: 'offer_accepted',
+  OFFER_REJECTED: 'offer_rejected',
+  SYSTEM: 'system',
+};
+
+// Rejections were stored as 'listing_declined' before the type set was
+// standardized; existing rows keep that value and clients still render it.
+const LEGACY_NOTIFICATION_TYPES = ['listing_declined'];
+
+/**
+ * @param {import('pg').Pool} pool
+ * @param {{ userId: number, type: string, title: string, message: string, relatedListingId?: number|null }} notification
+ * @returns {Promise<object>} the created row
+ */
+async function createNotification(pool, { userId, type, title, message, relatedListingId = null }) {
+  if (!userId) throw new Error('createNotification requires a userId');
+  if (!type) throw new Error('createNotification requires a type');
+  if (!title) throw new Error('createNotification requires a title');
+  if (!message) throw new Error('createNotification requires a message');
+
+  const result = await pool.query(
+    `INSERT INTO notifications (user_id, related_listing_id, type, title, message)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING *`,
+    [userId, relatedListingId, type, title, message]
+  );
+
+  return result.rows[0];
+}
+
+/**
+ * Notifications are never important enough to fail the action that triggered
+ * them, so route handlers use this wrapper instead of createNotification.
+ */
+async function safeCreateNotification(pool, notification) {
+  try {
+    return await createNotification(pool, notification);
+  } catch (error) {
+    console.error('Error creating notification:', error.message);
+    return null;
+  }
+}
+
+/** "Apple iPhone 15 Pro", or null when the listing or its catalog rows are gone. */
+async function getListingDeviceName(pool, listingId) {
+  const result = await pool.query(
+    `SELECT b.name AS brand_name, m.name AS model_name
+     FROM listings l
+     JOIN models m ON l.model_id = m.id
+     JOIN brands b ON m.brand_id = b.id
+     WHERE l.id = $1`,
+    [listingId]
+  );
+
+  if (result.rows.length === 0) return null;
+  const { brand_name, model_name } = result.rows[0];
+  return `${brand_name} ${model_name}`.trim();
+}
+
+const describeListing = (deviceName) => (deviceName ? `"${deviceName}"` : 'listing');
+
+function notifyListingApproved(pool, { userId, listingId, deviceName }) {
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.LISTING_APPROVED,
+    title: 'Listing Approved',
+    message: `Your listing ${describeListing(deviceName)} has been approved and is now live.`,
+  });
+}
+
+function notifyListingRejected(pool, { userId, listingId, deviceName, reason }) {
+  const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
+  const reasonText = trimmedReason ? ` Reason: ${trimmedReason}` : '';
+
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.LISTING_REJECTED,
+    title: 'Listing Rejected',
+    message: `Your listing ${describeListing(deviceName)} was rejected.${reasonText}`,
+  });
+}
+
+function notifyListingSold(pool, { userId, listingId, deviceName }) {
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.LISTING_SOLD,
+    title: 'Listing Sold',
+    message: `Congratulations! Your listing ${describeListing(deviceName)} has been marked as sold.`,
+  });
+}
+
+function notifyListingHidden(pool, { userId, listingId, deviceName }) {
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.LISTING_HIDDEN,
+    title: 'Listing Hidden',
+    message: `Your listing ${describeListing(deviceName)} has been hidden and is no longer visible to buyers.`,
+  });
+}
+
+function notifyListingActive(pool, { userId, listingId, deviceName }) {
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.LISTING_ACTIVE,
+    title: 'Listing Active',
+    message: `Your listing ${describeListing(deviceName)} is visible to buyers again.`,
+  });
+}
+
+/** "600" for 600.00, "600.50" for 600.50 — prices read better without dead decimals. */
+function formatPrice(price) {
+  const numeric = Number(price);
+  if (!Number.isFinite(numeric)) return String(price);
+  return numeric % 1 === 0 ? String(numeric) : numeric.toFixed(2);
+}
+
+function notifyOfferReceived(pool, { sellerId, listingId, deviceName, offeredPrice }) {
+  return safeCreateNotification(pool, {
+    userId: sellerId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.OFFER_RECEIVED,
+    title: 'New Offer',
+    message: `You received an offer of ${formatPrice(offeredPrice)} JOD for your listing ${describeListing(deviceName)}.`,
+  });
+}
+
+function notifyOfferAccepted(pool, { buyerId, listingId, deviceName, offeredPrice }) {
+  return safeCreateNotification(pool, {
+    userId: buyerId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.OFFER_ACCEPTED,
+    title: 'Offer Accepted',
+    message: `Your offer of ${formatPrice(offeredPrice)} JOD for ${describeListing(deviceName)} has been accepted.`,
+  });
+}
+
+function notifyOfferRejected(pool, { buyerId, listingId, deviceName, offeredPrice }) {
+  return safeCreateNotification(pool, {
+    userId: buyerId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.OFFER_REJECTED,
+    title: 'Offer Declined',
+    message: `Your offer of ${formatPrice(offeredPrice)} JOD for ${describeListing(deviceName)} was declined.`,
+  });
+}
+
+/** Generic entry point for any future backend code that needs to tell a user something. */
+function notifySystem(pool, { userId, title, message, relatedListingId = null }) {
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId,
+    type: NOTIFICATION_TYPES.SYSTEM,
+    title,
+    message,
+  });
+}
+
+/** Moderation queue heads-up for every admin. */
+async function notifyAdminsOfNewListing(pool, { listingId, deviceName, price }) {
+  try {
+    const admins = await pool.query('SELECT id FROM users WHERE is_admin = TRUE');
+    const priceText = price !== undefined && price !== null ? ` (${price} JOD)` : '';
+
+    await Promise.all(
+      admins.rows.map((admin) =>
+        safeCreateNotification(pool, {
+          userId: admin.id,
+          relatedListingId: listingId,
+          type: NOTIFICATION_TYPES.NEW_LISTING,
+          title: 'New Listing Pending Approval',
+          message: `New listing pending approval: ${deviceName || `listing #${listingId}`}${priceText}`,
+        })
+      )
+    );
+  } catch (error) {
+    console.error('Error creating admin notifications:', error.message);
+  }
+}
+
+module.exports = {
+  NOTIFICATION_TYPES,
+  LEGACY_NOTIFICATION_TYPES,
+  createNotification,
+  safeCreateNotification,
+  getListingDeviceName,
+  notifyListingApproved,
+  notifyListingRejected,
+  notifyListingSold,
+  notifyListingHidden,
+  notifyListingActive,
+  notifyOfferReceived,
+  notifyOfferAccepted,
+  notifyOfferRejected,
+  notifySystem,
+  notifyAdminsOfNewListing,
+  formatPrice,
+};

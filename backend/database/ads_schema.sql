@@ -23,6 +23,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS update_ads_timestamp ON ads;
 CREATE TRIGGER update_ads_timestamp
     BEFORE UPDATE ON ads
     FOR EACH ROW

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -9,18 +9,21 @@ import {
   ActivityIndicator,
   Dimensions,
   Modal,
+  TextInput,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { Linking } from 'react-native';
-import axios from 'axios';
+import apiClient from '../utils/api';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
+import { useFavorites } from '../context/FavoritesContext';
+import FavoriteButton from '../components/FavoriteButton';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const API_BASE_URL = 'https://yun-nonerrant-joaquina.ngrok-free.dev/api';
 
 export default function ListingDetailsScreen() {
   const navigation = useNavigation();
@@ -28,27 +31,108 @@ export default function ListingDetailsScreen() {
   const { colors, isDarkMode } = useTheme();
   const { t, isRTL, language } = useLanguage();
   const { listingId } = route.params;
+  const { loadFavorites } = useFavorites();
   const [listing, setListing] = useState(null);
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [imageModalVisible, setImageModalVisible] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+  const [offerModalVisible, setOfferModalVisible] = useState(false);
+  const [offerAmount, setOfferAmount] = useState('');
+  const [submittingOffer, setSubmittingOffer] = useState(false);
+  const [updatingVisibility, setUpdatingVisibility] = useState(false);
   const horizontalScrollViewRef = useRef(null);
+  // One view per screen session, no matter how often this screen re-renders.
+  const registeredViewFor = useRef(null);
 
-  useEffect(() => {
-    fetchListingDetails();
-  }, [listingId]);
-
-  const fetchListingDetails = async () => {
+  const fetchListingDetails = useCallback(async () => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/listings/${listingId}`);
+      // The response only carries `views` when the current user owns the listing.
+      const response = await apiClient.get(`/listings/${listingId}`);
       setListing(response.data.listing);
       setImages(response.data.images || []);
     } catch (error) {
       console.error('Error fetching listing details:', error);
     } finally {
       setLoading(false);
+    }
+  }, [listingId]);
+
+  const registerView = useCallback(async () => {
+    if (registeredViewFor.current === listingId) return;
+    registeredViewFor.current = listingId;
+
+    try {
+      const response = await apiClient.post(`/listings/${listingId}/view`);
+      if (response.data?.views !== undefined) {
+        setListing((prev) => (prev ? { ...prev, views: response.data.views } : prev));
+      }
+    } catch (error) {
+      // A missed view must never affect the listing the user is reading.
+      console.error('Error registering listing view:', error);
+    }
+  }, [listingId]);
+
+  useEffect(() => {
+    fetchListingDetails();
+  }, [fetchListingDetails]);
+
+  useEffect(() => {
+    // Deliberately not awaited alongside the listing fetch — the screen renders first.
+    registerView();
+  }, [registerView]);
+
+  useEffect(() => {
+    // No-op when the shared favorite state is already in memory.
+    loadFavorites();
+  }, [loadFavorites]);
+
+  const unhideListing = async () => {
+    setUpdatingVisibility(true);
+    try {
+      const response = await apiClient.patch(`/listings/${listingId}/unhide`);
+      // The response carries the refreshed row, so no second fetch is needed.
+      setListing((prev) => (prev ? { ...prev, ...response.data.listing } : prev));
+      Alert.alert(t('common.success'), t('myListings.unhiddenSuccess'));
+    } catch (error) {
+      console.error('Error unhiding listing:', error.response?.data || error.message);
+      Alert.alert(t('common.error'), error.response?.data?.error || t('myListings.visibilityFailed'));
+    } finally {
+      setUpdatingVisibility(false);
+    }
+  };
+
+  const openOfferModal = () => {
+    setOfferAmount('');
+    setOfferModalVisible(true);
+  };
+
+  const closeOfferModal = () => {
+    setOfferModalVisible(false);
+    setOfferAmount('');
+  };
+
+  const submitOffer = async () => {
+    const amount = Number(offerAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      Alert.alert(t('common.error'), t('offers.invalidAmount'));
+      return;
+    }
+
+    setSubmittingOffer(true);
+    try {
+      const response = await apiClient.post(`/offers/${listingId}`, { offered_price: amount });
+      closeOfferModal();
+      Alert.alert(
+        t('common.success'),
+        response.data.updated ? t('offers.offerUpdated') : t('offers.offerSubmitted')
+      );
+    } catch (error) {
+      console.error('Error submitting offer:', error.response?.data || error.message);
+      Alert.alert(t('common.error'), error.response?.data?.error || t('offers.submitFailed'));
+    } finally {
+      setSubmittingOffer(false);
     }
   };
 
@@ -79,7 +163,7 @@ export default function ListingDetailsScreen() {
           <Ionicons name={isRTL ? "arrow-forward" : "arrow-back"} size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.text }, getTextAlign(isRTL, 'center')]}>{t('listingDetails.listingDetails')}</Text>
-        <View style={{ width: 24 }} />
+        <FavoriteButton listingId={listingId} variant="plain" size={24} style={{ width: 24 }} />
       </View>
 
       <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
@@ -148,6 +232,34 @@ export default function ListingDetailsScreen() {
 
         {/* Listing Info */}
         <View style={[styles.infoSection, { backgroundColor: colors.surface }]}>
+          {/* Only the owner can reach a hidden listing, so this is owner-only by definition */}
+          {listing.status === 'hidden' && listing.is_owner && (
+            <View style={[styles.hiddenNotice, { backgroundColor: colors.inputBackground }]}>
+              <View style={[styles.hiddenNoticeHeader, getFlexDirection(isRTL, 'row')]}>
+                <Ionicons
+                  name="eye-off-outline"
+                  size={18}
+                  color={colors.textSecondary}
+                  style={{ marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }}
+                />
+                <Text style={[styles.hiddenNoticeText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+                  {t('listingDetails.hiddenNotice')}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.unhideButton, { backgroundColor: colors.primary }, updatingVisibility && styles.unhideButtonBusy]}
+                onPress={unhideListing}
+                disabled={updatingVisibility}
+              >
+                {updatingVisibility ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={styles.unhideButtonText}>{t('myListings.unhideListing')}</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          )}
+
           <View style={styles.priceSection}>
             <Text style={[styles.price, { color: colors.primary }]}>{listing.price} JOD</Text>
             <View style={[styles.conditionBadge, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.9)' : 'rgba(0, 0, 0, 0.6)' }]}>
@@ -178,11 +290,22 @@ export default function ListingDetailsScreen() {
             {listing.brand_name} {listing.model_name}
           </Text>
 
-          <View style={styles.specsSection}>
-            <View style={[styles.specItem, getFlexDirection(isRTL, 'row')]}>
-              <Ionicons name="hardware-chip-outline" size={20} color={colors.textSecondary} style={{ marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }} />
-              <Text style={[styles.specText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{listing.chipset || 'N/A'}</Text>
+          {/* Present only when the API recognised the viewer as the owner */}
+          {listing.views !== undefined && listing.views !== null && (
+            <View style={[styles.viewsRow, getFlexDirection(isRTL, 'row')]}>
+              <Ionicons
+                name="eye-outline"
+                size={16}
+                color={colors.textSecondary}
+                style={{ marginRight: isRTL ? 0 : 6, marginLeft: isRTL ? 6 : 0 }}
+              />
+              <Text style={[styles.viewsText, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>
+                {listing.views} {t('listingDetails.views')}
+              </Text>
             </View>
+          )}
+
+          <View style={styles.specsSection}>
             <View style={[styles.specItem, getFlexDirection(isRTL, 'row')]}>
               <Ionicons name="albums-outline" size={20} color={colors.textSecondary} style={{ marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }} />
               <Text style={[styles.specText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{listing.capacity_gb} GB</Text>
@@ -203,6 +326,12 @@ export default function ListingDetailsScreen() {
               />
               <Text style={[styles.specText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{listing.color_name}</Text>
             </View>
+            {listing.sim_configuration_name && (
+              <View style={[styles.specItem, getFlexDirection(isRTL, 'row')]}>
+                <Ionicons name="cellular-outline" size={20} color={colors.textSecondary} style={{ marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }} />
+                <Text style={[styles.specText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{listing.sim_configuration_name}</Text>
+              </View>
+            )}
             {listing.screen_size && (
               <View style={[styles.specItem, getFlexDirection(isRTL, 'row')]}>
                 <Ionicons name="phone-portrait-outline" size={20} color={colors.textSecondary} style={{ marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }} />
@@ -251,10 +380,75 @@ export default function ListingDetailsScreen() {
               </TouchableOpacity>
             )}
           </View>
+
+          {/* Buyers only: the API tells us whether this user owns the listing */}
+          {!listing.is_owner && listing.status === 'approved' && (
+            <TouchableOpacity
+              style={[styles.makeOfferButton, { backgroundColor: colors.primary }, getFlexDirection(isRTL, 'row')]}
+              onPress={openOfferModal}
+            >
+              <Ionicons name="pricetag-outline" size={18} color="#ffffff" style={{ marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }} />
+              <Text style={styles.makeOfferText}>{t('offers.makeAnOffer')}</Text>
+            </TouchableOpacity>
+          )}
         </View>
 
         </View>
       </ScrollView>
+
+      {/* Make an Offer */}
+      <Modal
+        visible={offerModalVisible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={closeOfferModal}
+      >
+        <View style={styles.offerModalOverlay}>
+          <View style={[styles.offerModalCard, { backgroundColor: colors.surface }]}>
+            <Text style={[styles.offerModalTitle, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+              {t('offers.makeAnOffer')}
+            </Text>
+            <Text style={[styles.offerModalSubtitle, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>
+              {t('offers.askingPriceIs')} {listing.price} JOD
+            </Text>
+
+            <TextInput
+              style={[styles.offerInput, {
+                backgroundColor: colors.inputBackground,
+                borderColor: colors.inputBorder,
+                color: colors.text,
+              }, getTextAlign(isRTL, 'auto')]}
+              value={offerAmount}
+              onChangeText={setOfferAmount}
+              placeholder={t('offers.offerAmountPlaceholder')}
+              placeholderTextColor={colors.textSecondary}
+              keyboardType="numeric"
+              autoFocus
+            />
+
+            <View style={[styles.offerModalActions, getFlexDirection(isRTL, 'row')]}>
+              <TouchableOpacity
+                style={[styles.offerModalButton, { backgroundColor: colors.inputBackground }]}
+                onPress={closeOfferModal}
+                disabled={submittingOffer}
+              >
+                <Text style={[styles.offerModalButtonText, { color: colors.text }]}>{t('common.cancel')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.offerModalButton, { backgroundColor: colors.primary }, submittingOffer && styles.offerModalButtonBusy]}
+                onPress={submitOffer}
+                disabled={submittingOffer}
+              >
+                {submittingOffer ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Text style={[styles.offerModalButtonText, { color: '#ffffff' }]}>{t('offers.submit')}</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       {/* Full Screen Image Modal */}
       <Modal
@@ -459,6 +653,15 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 16,
   },
+  viewsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: -8,
+    marginBottom: 16,
+  },
+  viewsText: {
+    fontSize: 14,
+  },
   specsSection: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -528,6 +731,95 @@ const styles = StyleSheet.create({
   callText: {
     color: '#ffffff',
     fontSize: 14,
+    fontWeight: '600',
+  },
+  hiddenNotice: {
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
+  hiddenNoticeHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  hiddenNoticeText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  unhideButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginTop: 10,
+  },
+  unhideButtonBusy: {
+    opacity: 0.7,
+  },
+  unhideButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  makeOfferButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 12,
+    marginTop: 20,
+  },
+  makeOfferText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  offerModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  offerModalCard: {
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 36,
+  },
+  offerModalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  offerModalSubtitle: {
+    fontSize: 14,
+    marginTop: 4,
+  },
+  offerInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 16,
+  },
+  offerModalActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 20,
+  },
+  offerModalButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: 12,
+  },
+  offerModalButtonBusy: {
+    opacity: 0.7,
+  },
+  offerModalButtonText: {
+    fontSize: 16,
     fontWeight: '600',
   },
   locationItem: {

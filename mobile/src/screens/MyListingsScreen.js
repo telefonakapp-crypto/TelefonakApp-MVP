@@ -19,7 +19,11 @@ import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 
-const API_BASE_URL = 'https://yun-nonerrant-joaquina.ngrok-free.dev/api';
+const API_BASE_URL = 'http://localhost:3000/api';
+
+// Mirrors TERMINAL_LISTING_STATUSES on the backend: these listings are history
+// and carry no actions.
+const TERMINAL_STATUSES = ['sold', 'deleted'];
 
 export default function MyListingsScreen() {
   const navigation = useNavigation();
@@ -118,6 +122,10 @@ export default function MyListingsScreen() {
         return '#ef4444';
       case 'sold':
         return '#6b7280';
+      case 'hidden':
+        return '#8b5cf6';
+      case 'deleted':
+        return '#a1a1aa';
       default:
         return '#71717a';
     }
@@ -126,13 +134,17 @@ export default function MyListingsScreen() {
   const getStatusText = (status) => {
     switch (status) {
       case 'approved':
-        return t('myListings.active');
+        return t('myListings.approved');
       case 'pending':
         return t('common.pending');
       case 'declined':
         return t('common.declined');
       case 'sold':
         return t('myListings.sold');
+      case 'hidden':
+        return t('myListings.hidden');
+      case 'deleted':
+        return t('myListings.deleted');
       default:
         return status;
     }
@@ -170,6 +182,42 @@ export default function MyListingsScreen() {
     );
   };
 
+  // Hiding and unhiding are the same request in opposite directions; the list
+  // row is patched from the response instead of refetching every listing.
+  const setListingVisibility = async (listingId, action) => {
+    try {
+      const token = await AsyncStorage.getItem('authToken');
+      const response = await axios.patch(`${API_BASE_URL}/listings/${listingId}/${action}`, {}, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const updated = response.data.listing;
+      setListings((prev) => prev.map((item) => (item.id === listingId ? { ...item, ...updated } : item)));
+      Alert.alert(
+        t('common.success'),
+        action === 'hide' ? t('myListings.hiddenSuccess') : t('myListings.unhiddenSuccess')
+      );
+    } catch (error) {
+      console.error(`Error on listing ${action}:`, error.response?.data || error.message);
+      Alert.alert(t('common.error'), error.response?.data?.error || t('myListings.visibilityFailed'));
+      fetchListings();
+    }
+  };
+
+  const handleHideListing = (listingId) => {
+    Alert.alert(
+      t('myListings.hideListing'),
+      t('myListings.hideListingConfirm'),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('myListings.hide'),
+          style: 'default',
+          onPress: () => setListingVisibility(listingId, 'hide'),
+        },
+      ]
+    );
+  };
+
   const handleDeleteListing = (listingId) => {
     Alert.alert(
       t('myListings.deleteListing') || 'Delete Listing',
@@ -187,11 +235,12 @@ export default function MyListingsScreen() {
                   Authorization: `Bearer ${token}`,
                 },
               });
-              Alert.alert('Success', 'Listing deleted successfully');
+              Alert.alert(t('common.success'), t('myListings.deletedSuccess'));
+              // Refetch so the card moves into the Deleted Listings section.
               fetchListings();
             } catch (error) {
-              console.error('Error deleting listing:', error);
-              Alert.alert('Error', 'Failed to delete listing');
+              console.error('Error deleting listing:', error.response?.data || error.message);
+              Alert.alert(t('common.error'), error.response?.data?.error || t('myListings.deleteFailed'));
             }
           },
         },
@@ -207,6 +256,23 @@ export default function MyListingsScreen() {
         </View>
       </SafeAreaView>
     );
+  }
+
+  // Sold and deleted listings are history, so they sit in their own sections
+  // below the active ones. This becomes the Active / History tabs in the UI phase.
+  const activeListings = listings.filter((listing) => !TERMINAL_STATUSES.includes(listing.status));
+  const soldListings = listings.filter((listing) => listing.status === 'sold');
+  const deletedListings = listings.filter((listing) => listing.status === 'deleted');
+  const orderedListings = [...activeListings, ...soldListings, ...deletedListings];
+
+  // Index of the first card in each history section, so one map can render
+  // all three groups through the same listing card.
+  const sectionTitles = new Map();
+  if (soldListings.length > 0) {
+    sectionTitles.set(activeListings.length, t('myListings.soldListings'));
+  }
+  if (deletedListings.length > 0) {
+    sectionTitles.set(activeListings.length + soldListings.length, t('myListings.deletedListings'));
   }
 
   return (
@@ -239,9 +305,20 @@ export default function MyListingsScreen() {
             </TouchableOpacity>
           </View>
         ) : (
-          listings.map((listing) => {
-            const CardWrapper = listing.status === 'sold' ? TouchableOpacity : View;
-            const cardProps = listing.status === 'sold' 
+          orderedListings.map((listing, index) => {
+            // History cards carry no action row, so the whole card opens the
+            // listing instead — deleted listings stay readable to their owner.
+            const isHistory = TERMINAL_STATUSES.includes(listing.status);
+            const CardWrapper = isHistory ? TouchableOpacity : View;
+            const sectionTitle = sectionTitles.get(index);
+            const sectionHeader = sectionTitle ? (
+              <Text
+                style={[styles.sectionTitle, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}
+              >
+                {sectionTitle}
+              </Text>
+            ) : null;
+            const cardProps = isHistory
               ? { 
                   onPress: () => navigation.navigate('ListingDetails', { listingId: listing.id }),
                   activeOpacity: 0.8 
@@ -249,12 +326,13 @@ export default function MyListingsScreen() {
               : {};
             
             return (
+              <React.Fragment key={listing.id}>
+              {sectionHeader}
               <CardWrapper 
-                key={listing.id} 
                 style={[
                   styles.listingCard, 
                   { backgroundColor: colors.surface },
-                  listing.status === 'sold' && styles.soldListingCard
+                  isHistory && styles.soldListingCard
                 ]}
                 {...cardProps}
               >
@@ -271,13 +349,13 @@ export default function MyListingsScreen() {
                   {listing.thumbnail_image ? (
                     <Image
                       source={{ uri: listing.thumbnail_image }}
-                      style={[styles.thumbnail, listing.status === 'sold' && styles.soldThumbnail, { marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }]}
+                      style={[styles.thumbnail, isHistory && styles.soldThumbnail, { marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }]}
                     />
                   ) : (
                     <View style={[
                       styles.thumbnailPlaceholder, 
                       { backgroundColor: colors.inputBackground, marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 },
-                      listing.status === 'sold' && styles.soldThumbnail
+                      isHistory && styles.soldThumbnail
                     ]}>
                       <Ionicons name="image-outline" size={24} color={colors.textSecondary} />
                     </View>
@@ -286,7 +364,7 @@ export default function MyListingsScreen() {
                     <Text style={[
                       styles.listingTitle, 
                       { color: colors.text },
-                      listing.status === 'sold' && styles.soldText,
+                      isHistory && styles.soldText,
                       getTextAlign(isRTL, 'auto')
                     ]}>
                       {listing.brand_name} {listing.model_name}
@@ -294,7 +372,7 @@ export default function MyListingsScreen() {
                     <Text style={[
                       styles.listingPrice, 
                       { color: colors.primary },
-                      listing.status === 'sold' && styles.soldText,
+                      isHistory && styles.soldText,
                       getTextAlign(isRTL, 'auto')
                     ]}>
                       {listing.price} JOD
@@ -303,12 +381,31 @@ export default function MyListingsScreen() {
                       <Text style={[
                         styles.listingMetaText, 
                         { color: colors.textSecondary },
-                        listing.status === 'sold' && styles.soldText,
+                        isHistory && styles.soldText,
                         getTextAlign(isRTL, 'auto')
                       ]}>
                         {listing.capacity_gb} GB • {listing.color_name}
                       </Text>
                     </View>
+                    {/* Sellers see view counts for their own listings only */}
+                    {listing.user_id === currentUserId && listing.views !== undefined && listing.views !== null && (
+                      <View style={[styles.listingMeta, getFlexDirection(isRTL, 'row')]}>
+                        <Ionicons
+                          name="eye-outline"
+                          size={14}
+                          color={colors.textSecondary}
+                          style={{ marginRight: isRTL ? 0 : 4, marginLeft: isRTL ? 4 : 0 }}
+                        />
+                        <Text style={[
+                          styles.listingMetaText,
+                          { color: colors.textSecondary },
+                          isHistory && styles.soldText,
+                          getTextAlign(isRTL, 'auto')
+                        ]}>
+                          {listing.views} {t('myListings.views')}
+                        </Text>
+                      </View>
+                    )}
                   </View>
                 </View>
                 <View style={[styles.statusBadge, { backgroundColor: getStatusColor(listing.status) + '20' }]}>
@@ -318,7 +415,8 @@ export default function MyListingsScreen() {
                 </View>
               </View>
 
-              {listing.status !== 'sold' && (
+              {/* Sold and deleted listings are read-only history: no actions at all */}
+              {!isHistory && (
                 <View style={[styles.listingActions, { borderTopColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}>
                   <TouchableOpacity
                     style={[styles.actionButton, { backgroundColor: colors.inputBackground }, getFlexDirection(isRTL, 'row')]}
@@ -327,7 +425,7 @@ export default function MyListingsScreen() {
                     <Ionicons name="eye-outline" size={20} color={colors.primary} style={{ marginRight: isRTL ? 0 : 6, marginLeft: isRTL ? 6 : 0 }} />
                     <Text style={[styles.actionButtonText, { color: colors.primary }, getTextAlign(isRTL, 'auto')]}>{t('myListings.view')}</Text>
                   </TouchableOpacity>
-                  {listing.status === 'pending' && (
+                  {(listing.status === 'pending' || listing.status === 'approved') && listing.user_id === currentUserId && (
                     <TouchableOpacity
                       style={[styles.actionButton, { backgroundColor: colors.inputBackground }, getFlexDirection(isRTL, 'row')]}
                       onPress={() => navigation.navigate('EditListing', { listingId: listing.id })}
@@ -345,16 +443,38 @@ export default function MyListingsScreen() {
                       <Text style={[styles.actionButtonText, styles.soldButtonText, { color: colors.success }, getTextAlign(isRTL, 'auto')]}>{t('myListings.markAsSold')}</Text>
                     </TouchableOpacity>
                   )}
-                  <TouchableOpacity
-                    style={[styles.actionButton, styles.deleteButton, { backgroundColor: isDarkMode ? '#7f1d1d' : '#fee2e2' }, getFlexDirection(isRTL, 'row')]}
-                    onPress={() => handleDeleteListing(listing.id)}
-                  >
-                    <Ionicons name="trash-outline" size={20} color={colors.error} style={{ marginRight: isRTL ? 0 : 6, marginLeft: isRTL ? 6 : 0 }} />
-                    <Text style={[styles.actionButtonText, styles.deleteButtonText, { color: colors.error }, getTextAlign(isRTL, 'auto')]}>{t('myListings.delete')}</Text>
-                  </TouchableOpacity>
+                  {listing.status === 'approved' && listing.user_id === currentUserId && (
+                    <TouchableOpacity
+                      style={[styles.actionButton, { backgroundColor: colors.inputBackground }, getFlexDirection(isRTL, 'row')]}
+                      onPress={() => handleHideListing(listing.id)}
+                    >
+                      <Ionicons name="eye-off-outline" size={20} color={colors.textSecondary} style={{ marginRight: isRTL ? 0 : 6, marginLeft: isRTL ? 6 : 0 }} />
+                      <Text style={[styles.actionButtonText, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>{t('myListings.hide')}</Text>
+                    </TouchableOpacity>
+                  )}
+                  {listing.status === 'hidden' && listing.user_id === currentUserId && (
+                    <TouchableOpacity
+                      style={[styles.actionButton, { backgroundColor: colors.inputBackground }, getFlexDirection(isRTL, 'row')]}
+                      onPress={() => setListingVisibility(listing.id, 'unhide')}
+                    >
+                      <Ionicons name="eye-outline" size={20} color={colors.primary} style={{ marginRight: isRTL ? 0 : 6, marginLeft: isRTL ? 6 : 0 }} />
+                      <Text style={[styles.actionButtonText, { color: colors.primary }, getTextAlign(isRTL, 'auto')]}>{t('myListings.unhide')}</Text>
+                    </TouchableOpacity>
+                  )}
+                  {/* Deleting is owner-only, so admins browsing all listings don't see it */}
+                  {listing.user_id === currentUserId && (
+                    <TouchableOpacity
+                      style={[styles.actionButton, styles.deleteButton, { backgroundColor: isDarkMode ? '#7f1d1d' : '#fee2e2' }, getFlexDirection(isRTL, 'row')]}
+                      onPress={() => handleDeleteListing(listing.id)}
+                    >
+                      <Ionicons name="trash-outline" size={20} color={colors.error} style={{ marginRight: isRTL ? 0 : 6, marginLeft: isRTL ? 6 : 0 }} />
+                      <Text style={[styles.actionButtonText, styles.deleteButtonText, { color: colors.error }, getTextAlign(isRTL, 'auto')]}>{t('myListings.delete')}</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
               )}
             </CardWrapper>
+              </React.Fragment>
             );
           })
         )}
@@ -463,9 +583,18 @@ const styles = StyleSheet.create({
   },
   listingMeta: {
     flexDirection: 'row',
+    alignItems: 'center',
   },
   listingMetaText: {
     fontSize: 12,
+  },
+  sectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginTop: 8,
+    marginBottom: 12,
   },
   statusBadge: {
     paddingHorizontal: 12,

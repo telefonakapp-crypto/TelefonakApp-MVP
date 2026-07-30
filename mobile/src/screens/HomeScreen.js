@@ -16,7 +16,6 @@ import {
   Dimensions,
   Linking,
   Animated,
-  Keyboard,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,6 +25,19 @@ import apiClient, { API_BASE_URL } from '../utils/api';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
+import {
+  EMPTY_MARKETPLACE_FILTERS,
+  countActiveMarketplaceFilters,
+  buildMarketplaceListingParams,
+  validateMarketplaceFilters,
+  localizedPlaceName,
+  normalizeMarketplaceSearch,
+} from '../utils/marketplaceFilters';
+import { filterMvpCategories } from '../utils/mvpCategories';
+import { handleBannerAction } from '../utils/bannerActions';
+import { useFavorites } from '../context/FavoritesContext';
+import { useNotifications } from '../context/NotificationsContext';
+import FavoriteButton from '../components/FavoriteButton';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -34,44 +46,49 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { colors, isDarkMode } = useTheme();
   const { language, changeLanguage, t, isRTL } = useLanguage();
+  const { loadFavorites, clearFavorites } = useFavorites();
+  // Badge count is shared with the Notifications screen so both stay in sync.
+  const { unreadCount, refreshUnreadCount, clearUnreadCount } = useNotifications();
   const [listings, setListings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [brands, setBrands] = useState([]);
-  const [storageOptions, setStorageOptions] = useState([]);
   const [conditions, setConditions] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [filterBrands, setFilterBrands] = useState([]);
+  const [filterModels, setFilterModels] = useState([]);
+  const [modelStorages, setModelStorages] = useState([]);
+  const [modelColors, setModelColors] = useState([]);
+  const [cities, setCities] = useState([]);
+  const [areas, setAreas] = useState([]);
   const [showFilterModal, setShowFilterModal] = useState(false);
-  const brandScrollRef = useRef(null);
-  const storageScrollRef = useRef(null);
-  const conditionScrollRef = useRef(null);
-  const [showSearchModal, setShowSearchModal] = useState(false);
-  const [searchModalQuery, setSearchModalQuery] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
-  const [searchLoading, setSearchLoading] = useState(false);
   const searchInputRef = useRef(null);
+  const conditionScrollRef = useRef(null);
+  const categoryScrollRef = useRef(null);
+  const modelScrollRef = useRef(null);
+  const storageScrollRef = useRef(null);
+  const colorScrollRef = useRef(null);
+  const cityScrollRef = useRef(null);
+  const areaScrollRef = useRef(null);
+  const sortScrollRef = useRef(null);
+  const brandScrollRef = useRef(null);
   const [imageErrors, setImageErrors] = useState({});
-  const [unreadCount, setUnreadCount] = useState(0);
   const [isAdmin, setIsAdmin] = useState(false);
   const [userName, setUserName] = useState('');
   const [showMenu, setShowMenu] = useState(false);
   const menuSlideAnim = useRef(new Animated.Value(isRTL ? -SCREEN_WIDTH : SCREEN_WIDTH)).current;
-  const [ads, setAds] = useState([]);
-  const [originalAdsCount, setOriginalAdsCount] = useState(0);
-  const [currentAdIndex, setCurrentAdIndex] = useState(0);
-  const adsScrollRef = useRef(null);
-  const adsAutoScrollInterval = useRef(null);
+  const [banners, setBanners] = useState([]);
+  const [originalBannerCount, setOriginalBannerCount] = useState(0);
+  const [currentBannerIndex, setCurrentBannerIndex] = useState(0);
+  const bannersScrollRef = useRef(null);
+  const bannersAutoScrollInterval = useRef(null);
   const isScrollingRef = useRef(false);
   const pendingResetRef = useRef(false);
   
   // Filter state
-  const [filters, setFilters] = useState({
-    brand_id: '',
-    storage_id: '',
-    condition_id: '',
-    min_price: '',
-    max_price: '',
-  });
+  const [filters, setFilters] = useState({ ...EMPTY_MARKETPLACE_FILTERS });
 
   // Brand logo mapping - using Google Favicons API only
   const getBrandLogo = (brandName) => {
@@ -102,29 +119,6 @@ export default function HomeScreen() {
     const brandLower = brandName.toLowerCase().replace(/\s+/g, '');
     return `https://www.google.com/s2/favicons?domain=${brandLower}.com&sz=128`;
   };
-
-  const fetchUnreadCount = useCallback(async () => {
-    try {
-      // Respect push notification preference from Settings
-      const pushPref = await AsyncStorage.getItem('pushNotificationsEnabled');
-      if (pushPref === 'false') {
-        setUnreadCount(0);
-        return;
-      }
-
-      const pushNotificationsEnabled = await AsyncStorage.getItem('pushNotificationsEnabled');
-      if (pushNotificationsEnabled === 'false') {
-        setUnreadCount(0);
-        return;
-      }
-
-      const response = await apiClient.get('/admin/notifications/unread-count');
-      setUnreadCount(response.data.count || 0);
-    } catch (error) {
-      console.error('Error fetching unread count:', error);
-      setUnreadCount(0);
-    }
-  }, []);
 
   const handleCloseMenu = useCallback(() => {
     // Animate menu sliding out (to right in LTR, to left in RTL)
@@ -160,60 +154,58 @@ export default function HomeScreen() {
     }
   }, []);
 
-  const fetchAds = useCallback(async () => {
+  const fetchBanners = useCallback(async () => {
     try {
-      const response = await apiClient.get('/ads');
-      const fetchedAds = response.data.ads || [];
-      
-      // Store original count for infinite scroll calculations
-      setOriginalAdsCount(fetchedAds.length);
-      
-      // For infinite scroll, duplicate the ads array multiple times
-      // This allows seamless continuous scrolling
-      const duplicatedAds = fetchedAds.length > 1 
-        ? [...fetchedAds, ...fetchedAds, ...fetchedAds] // Triple for smooth infinite effect
-        : fetchedAds;
-      
-      setAds(duplicatedAds);
-      
-      // Reset current index when ads change
-      if (fetchedAds.length > 0) {
-        // Start from the middle set (second copy) for infinite scroll effect
-        const startIndex = fetchedAds.length;
-        setCurrentAdIndex(startIndex);
-        // Scroll to middle set (second copy) to enable infinite scrolling
-        if (adsScrollRef.current && fetchedAds.length > 1) {
-          const adWidth = SCREEN_WIDTH - 32;
+      const response = await apiClient.get('/banners');
+      const fetchedBanners = response.data.banners || [];
+
+      setOriginalBannerCount(fetchedBanners.length);
+
+      // Duplicate for seamless infinite carousel when multiple banners exist
+      const duplicatedBanners = fetchedBanners.length > 1
+        ? [...fetchedBanners, ...fetchedBanners, ...fetchedBanners]
+        : fetchedBanners;
+
+      setBanners(duplicatedBanners);
+
+      if (fetchedBanners.length > 0) {
+        const startIndex = fetchedBanners.length > 1 ? fetchedBanners.length : 0;
+        setCurrentBannerIndex(startIndex);
+        if (bannersScrollRef.current && fetchedBanners.length > 1) {
+          const bannerWidth = SCREEN_WIDTH - 32;
           setTimeout(() => {
-            adsScrollRef.current?.scrollTo({ 
-              x: startIndex * adWidth, 
-              animated: false 
+            bannersScrollRef.current?.scrollTo({
+              x: startIndex * bannerWidth,
+              animated: false,
             });
           }, 200);
-        } else if (adsScrollRef.current) {
-          adsScrollRef.current.scrollTo({ x: 0, animated: false });
+        } else if (bannersScrollRef.current) {
+          bannersScrollRef.current.scrollTo({ x: 0, animated: false });
         }
       }
     } catch (error) {
-      console.error('Error fetching ads:', error);
-      setAds([]);
-      setOriginalAdsCount(0);
+      // Banner failures must not block Home listings
+      console.error('Error fetching banners:', error);
+      setBanners([]);
+      setOriginalBannerCount(0);
     }
   }, []);
 
   useEffect(() => {
     fetchFilterData();
-    fetchUnreadCount();
+    refreshUnreadCount();
     fetchAdminStatus();
-    fetchAds();
-  }, [fetchUnreadCount, fetchAdminStatus, fetchAds]);
+    fetchBanners();
+    // Cached in FavoritesContext, so this only hits the API once per session.
+    loadFavorites();
+  }, [refreshUnreadCount, fetchAdminStatus, fetchBanners, loadFavorites]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchUnreadCount();
+      refreshUnreadCount();
       fetchAdminStatus();
-      fetchAds(); // Refresh ads when screen comes into focus
-    }, [fetchUnreadCount, fetchAdminStatus, fetchAds])
+      fetchBanners();
+    }, [refreshUnreadCount, fetchAdminStatus, fetchBanners])
   );
 
   // Refresh user name when screen comes into focus (e.g., after editing profile)
@@ -224,214 +216,213 @@ export default function HomeScreen() {
     return unsubscribe;
   }, [navigation, fetchAdminStatus]);
 
-  // Auto-scroll ads if there are multiple - infinite scroll (left to right continuously)
+  // Auto-scroll banners if there are multiple
   useEffect(() => {
-    // Wait a bit for the ScrollView to be ready
     const setupTimer = setTimeout(() => {
-      if (originalAdsCount > 1 && adsScrollRef.current && ads.length > 0) {
-        // Clear any existing interval
-        if (adsAutoScrollInterval.current) {
-          clearInterval(adsAutoScrollInterval.current);
+      if (originalBannerCount > 1 && bannersScrollRef.current && banners.length > 0) {
+        if (bannersAutoScrollInterval.current) {
+          clearInterval(bannersAutoScrollInterval.current);
         }
 
-        // Set up infinite auto-scroll: continuously move left to right smoothly
-        adsAutoScrollInterval.current = setInterval(() => {
-          // Skip if user is manually scrolling or ref is not available
-          if (isScrollingRef.current || !adsScrollRef.current) {
+        bannersAutoScrollInterval.current = setInterval(() => {
+          if (isScrollingRef.current || !bannersScrollRef.current) {
             return;
           }
 
-          const adWidth = SCREEN_WIDTH - 32;
-          
-          setCurrentAdIndex((prevIndex) => {
+          const bannerWidth = SCREEN_WIDTH - 32;
+
+          setCurrentBannerIndex((prevIndex) => {
             let nextIndex = prevIndex + 1;
-            let scrollX = nextIndex * adWidth;
-            
-            // Always scroll with smooth animation for better UX
-            // When scrolling to the third set (which looks like the first set),
-            // it creates the illusion of smoothly looping back to the beginning
-            if (adsScrollRef.current) {
-              // Check if we're scrolling to the third set (infinite scroll boundary)
-              if (nextIndex >= originalAdsCount * 2) {
-                // Mark that we need to reset after this scroll completes
+            let scrollX = nextIndex * bannerWidth;
+
+            if (bannersScrollRef.current) {
+              if (nextIndex >= originalBannerCount * 2) {
                 pendingResetRef.current = true;
               }
-              
-              // Scroll smoothly to the next ad (or to third set which looks like first)
-              adsScrollRef.current.scrollTo({
+
+              bannersScrollRef.current.scrollTo({
                 x: scrollX,
-                animated: true, // Always use smooth animation
+                animated: true,
               });
             }
-            
+
             return nextIndex;
           });
-        }, 4000); // 4 seconds per ad for smoother infinite scroll
+        }, 4000);
       }
-    }, 500); // Wait 500ms for ScrollView to be ready
+    }, 500);
 
     return () => {
       clearTimeout(setupTimer);
-      if (adsAutoScrollInterval.current) {
-        clearInterval(adsAutoScrollInterval.current);
+      if (bannersAutoScrollInterval.current) {
+        clearInterval(bannersAutoScrollInterval.current);
       }
     };
-  }, [originalAdsCount, ads.length]);
+  }, [originalBannerCount, banners.length]);
 
-  // Handle scroll start - mark as manually scrolling
-  const handleAdsScrollBeginDrag = () => {
+  const handleBannersScrollBeginDrag = () => {
     isScrollingRef.current = true;
   };
 
-  // Handle scroll end - update index with infinite scroll reset logic
-  // This is called when scroll animation completes (onMomentumScrollEnd)
-  const handleAdsScrollEnd = (event) => {
-    if (!event || !adsScrollRef.current) {
+  const handleBannersScrollEnd = (event) => {
+    if (!event || !bannersScrollRef.current) {
       isScrollingRef.current = false;
       pendingResetRef.current = false;
       return;
     }
-    
+
     const scrollPosition = event.nativeEvent.contentOffset.x;
-    const adWidth = SCREEN_WIDTH - 32;
-    let index = Math.round(scrollPosition / adWidth);
-    
-    // Check if we need to reset after smooth scroll to third set (infinite scroll boundary)
-    if (pendingResetRef.current && originalAdsCount > 1 && index >= originalAdsCount * 2) {
-      // Reset to the corresponding position in the middle set (second copy)
-      // This happens after the smooth scroll animation has completed
-      index = originalAdsCount + (index % originalAdsCount);
-      adsScrollRef.current.scrollTo({
-        x: index * adWidth,
-        animated: false, // Silent reset - user has already seen the smooth transition
+    const bannerWidth = SCREEN_WIDTH - 32;
+    let index = Math.round(scrollPosition / bannerWidth);
+
+    if (pendingResetRef.current && originalBannerCount > 1 && index >= originalBannerCount * 2) {
+      index = originalBannerCount + (index % originalBannerCount);
+      bannersScrollRef.current.scrollTo({
+        x: index * bannerWidth,
+        animated: false,
       });
-      setCurrentAdIndex(index);
+      setCurrentBannerIndex(index);
       pendingResetRef.current = false;
       isScrollingRef.current = false;
       return;
     }
-    
-    // Handle infinite scroll: if scrolled to first set, silently jump to middle set
-    if (originalAdsCount > 1 && index < originalAdsCount) {
-      index = originalAdsCount + index;
-      adsScrollRef.current.scrollTo({
-        x: index * adWidth,
-        animated: false, // Silent jump
+
+    if (originalBannerCount > 1 && index < originalBannerCount) {
+      index = originalBannerCount + index;
+      bannersScrollRef.current.scrollTo({
+        x: index * bannerWidth,
+        animated: false,
       });
-      setCurrentAdIndex(index);
+      setCurrentBannerIndex(index);
       isScrollingRef.current = false;
       return;
     }
-    
-    // Clear pending reset flag if we're in the middle set
-    if (index >= originalAdsCount && index < originalAdsCount * 2) {
+
+    if (index >= originalBannerCount && index < originalBannerCount * 2) {
       pendingResetRef.current = false;
     }
-    
-    // Update index normally
-    setCurrentAdIndex(index);
-    
-    // Reset scrolling flag to allow auto-scroll to continue
+
+    setCurrentBannerIndex(index);
     isScrollingRef.current = false;
+  };
+
+  const sortBrands = (brandsList) => {
+    return [...brandsList].sort((a, b) => {
+      if (a.name.toLowerCase() === 'apple') return -1;
+      if (b.name.toLowerCase() === 'apple') return 1;
+      if (a.name.toLowerCase() === 'samsung') return -1;
+      if (b.name.toLowerCase() === 'samsung') return 1;
+      return a.name.localeCompare(b.name);
+    });
   };
 
   const fetchFilterData = async () => {
     try {
-      const [brandsRes, storageRes, conditionsRes] = await Promise.all([
+      const [brandsRes, categoriesRes, conditionsRes, citiesRes] = await Promise.all([
         apiClient.get('/brands'),
-        apiClient.get('/storage'),
+        apiClient.get('/categories'),
         apiClient.get('/conditions'),
+        apiClient.get('/cities'),
       ]);
-      
-      // Sort brands to ensure Samsung appears second
-      const brandsList = brandsRes.data.brands || [];
-      const sortedBrands = [...brandsList].sort((a, b) => {
-        // Apple first
-        if (a.name.toLowerCase() === 'apple') return -1;
-        if (b.name.toLowerCase() === 'apple') return 1;
-        
-        // Samsung second
-        if (a.name.toLowerCase() === 'samsung') return -1;
-        if (b.name.toLowerCase() === 'samsung') return 1;
-        
-        // Everything else alphabetically
-        return a.name.localeCompare(b.name);
-      });
-      
-      setBrands(sortedBrands);
-      setStorageOptions(storageRes.data.storage || []);
+
+      const sorted = sortBrands(brandsRes.data.brands || []);
+      setBrands(sorted);
+      setFilterBrands(sorted);
+      setCategories(filterMvpCategories(categoriesRes.data.categories || []));
       setConditions(conditionsRes.data.conditions || []);
+      setCities(citiesRes.data.cities || []);
     } catch (error) {
       console.error('Error fetching filter data:', error);
     }
   };
 
-  // Fetch search results without affecting main listings
-  const fetchSearchResults = React.useCallback(async (search = '', appliedFilters = {}) => {
+  const handleSelectCategory = async (cat_id) => {
     try {
-      const params = new URLSearchParams({
-        status: 'approved',
-        limit: '20',
-      });
-      
-      if (search && search.trim()) {
-        params.append('search', search.trim());
-      }
-
-      // Apply filters
-      if (appliedFilters.brand_id) {
-        params.append('brand_id', appliedFilters.brand_id);
-      }
-      if (appliedFilters.storage_id) {
-        params.append('storage_id', appliedFilters.storage_id);
-      }
-      if (appliedFilters.condition_id) {
-        params.append('condition_id', appliedFilters.condition_id);
-      }
-      if (appliedFilters.min_price) {
-        params.append('min_price', appliedFilters.min_price);
-      }
-      if (appliedFilters.max_price) {
-        params.append('max_price', appliedFilters.max_price);
-      }
-
-      const response = await apiClient.get(`/listings?${params.toString()}`);
-      const fetchedListings = response.data.listings || [];
-      return fetchedListings;
-    } catch (error) {
-      console.error('Error fetching search results:', error);
-      return [];
+      const url = cat_id ? `/brands?category_id=${cat_id}` : '/brands';
+      const res = await apiClient.get(url);
+      setFilterBrands(sortBrands(res.data.brands || []));
+    } catch (e) {
+      // keep existing filterBrands
     }
-  }, []);
+    setFilters(prev => ({
+      ...prev,
+      category_id: cat_id,
+      brand_id: '',
+      model_id: '',
+      model_storage_id: '',
+      model_color_id: '',
+      min_battery: '',
+      max_battery: '',
+    }));
+    setFilterModels([]);
+    setModelStorages([]);
+    setModelColors([]);
+  };
+
+  const handleSelectBrand = async (brand_id) => {
+    const currentCategoryId = filters.category_id;
+    setFilters(prev => ({
+      ...prev,
+      brand_id,
+      model_id: '',
+      model_storage_id: '',
+      model_color_id: '',
+    }));
+    setFilterModels([]);
+    setModelStorages([]);
+    setModelColors([]);
+    if (brand_id) {
+      try {
+        const url = currentCategoryId
+          ? `/brands/${brand_id}/models?category_id=${currentCategoryId}`
+          : `/brands/${brand_id}/models`;
+        const res = await apiClient.get(url);
+        setFilterModels(res.data.models || []);
+      } catch (e) {
+        // leave filterModels empty
+      }
+    }
+  };
+
+  const handleSelectModel = async (model_id) => {
+    setFilters(prev => ({
+      ...prev,
+      model_id,
+      model_storage_id: '',
+      model_color_id: '',
+    }));
+    setModelStorages([]);
+    setModelColors([]);
+    if (model_id) {
+      try {
+        const [storagesRes, colorsRes] = await Promise.all([
+          apiClient.get(`/models/${model_id}/storages`),
+          apiClient.get(`/models/${model_id}/colors`),
+        ]);
+        setModelStorages(storagesRes.data.storages || storagesRes.data || []);
+        setModelColors(colorsRes.data.colors || colorsRes.data || []);
+      } catch (e) {
+        // leave empty
+      }
+    }
+  };
+
+  const handleSelectCity = async (city_id) => {
+    setFilters(prev => ({ ...prev, city_id, area_id: '' }));
+    setAreas([]);
+    if (city_id) {
+      try {
+        const res = await apiClient.get(`/cities/${city_id}/areas`);
+        setAreas(res.data.areas || []);
+      } catch (e) {
+        // leave empty
+      }
+    }
+  };
 
   const fetchListings = React.useCallback(async (search = '', appliedFilters = {}) => {
     try {
-      const params = new URLSearchParams({
-        status: 'approved',
-        limit: '20',
-      });
-      
-      if (search && search.trim()) {
-        params.append('search', search.trim());
-      }
-
-      // Apply filters
-      if (appliedFilters.brand_id) {
-        params.append('brand_id', appliedFilters.brand_id);
-      }
-      if (appliedFilters.storage_id) {
-        params.append('storage_id', appliedFilters.storage_id);
-      }
-      if (appliedFilters.condition_id) {
-        params.append('condition_id', appliedFilters.condition_id);
-      }
-      if (appliedFilters.min_price) {
-        params.append('min_price', appliedFilters.min_price);
-      }
-      if (appliedFilters.max_price) {
-        params.append('max_price', appliedFilters.max_price);
-      }
-
+      const params = buildMarketplaceListingParams(appliedFilters, { search, limit: 20 });
       const response = await apiClient.get(`/listings?${params.toString()}`);
       const fetchedListings = response.data.listings || [];
       setListings(fetchedListings);
@@ -446,109 +437,79 @@ export default function HomeScreen() {
     }
   }, []);
 
+  // Debounce search input (~300ms) to avoid excessive API calls while typing
   useEffect(() => {
-    fetchListings(searchQuery, filters);
-  }, [fetchListings, searchQuery, filters]);
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(normalizeMarketplaceSearch(searchQuery));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setLoading(true);
+    fetchListings(debouncedSearchQuery, filters);
+  }, [fetchListings, debouncedSearchQuery, filters]);
 
   useFocusEffect(
     React.useCallback(() => {
-      fetchListings(searchQuery, filters);
-    }, [fetchListings, searchQuery, filters])
+      fetchListings(debouncedSearchQuery, filters);
+    }, [fetchListings, debouncedSearchQuery, filters])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
-    fetchListings(searchQuery, filters);
-    fetchAds(); // Also refresh ads on pull-to-refresh
+    fetchListings(debouncedSearchQuery, filters);
+    fetchBanners();
   };
 
   const handleSearchChange = (text) => {
     setSearchQuery(text);
   };
 
-  const handleSearchSubmit = () => {
-    fetchListings(searchQuery, filters);
+  const handleClearSearch = () => {
+    setSearchQuery('');
+    setDebouncedSearchQuery('');
+    searchInputRef.current?.blur();
   };
 
-  const handleSearchModalOpen = () => {
-    // Always start with empty search in modal - don't copy main searchQuery
-    setSearchModalQuery('');
-    setSearchResults([]);
-    setShowSearchModal(true);
-    setTimeout(() => {
-      searchInputRef.current?.focus();
-    }, 300);
-  };
-
-  const handleSearchModalClose = () => {
-    Keyboard.dismiss();
-    setShowSearchModal(false);
-    setSearchModalQuery('');
-    setSearchResults([]);
-  };
-
-  const handleSearchModalChange = async (text) => {
-    setSearchModalQuery(text);
-    if (text.trim()) {
-      setSearchLoading(true);
-      try {
-        // Use fetchSearchResults to avoid affecting main listings
-        const results = await fetchSearchResults(text, filters);
-        setSearchResults(results);
-      } catch (error) {
-        setSearchResults([]);
-      } finally {
-        setSearchLoading(false);
-      }
-    } else {
-      setSearchResults([]);
-      setSearchLoading(false);
+  const getListingsEmptyMessage = () => {
+    const hasFilters = countActiveMarketplaceFilters(filters) > 0;
+    const hasSearch = debouncedSearchQuery.length > 0;
+    if (hasSearch && hasFilters) {
+      return t('home.noMatchingFilters') || 'No listings match your filters';
     }
+    if (hasSearch) {
+      return t('home.noSearchResults') || 'No results found';
+    }
+    if (hasFilters) {
+      return t('home.noMatchingFilters') || 'No listings match your filters';
+    }
+    return t('home.noListings');
   };
 
-  const handleSearchModalSubmit = () => {
-    // Just dismiss keyboard - search is already performed via handleSearchModalChange
-    Keyboard.dismiss();
-  };
-
-  const handleSearchResultPress = (listingId) => {
-    handleSearchModalClose();
-    handleListingPress(listingId);
-  };
-
-  const getActiveFiltersCount = () => {
-    let count = 0;
-    if (filters.brand_id) count++;
-    if (filters.storage_id) count++;
-    if (filters.condition_id) count++;
-    if (filters.min_price) count++;
-    if (filters.max_price) count++;
-    return count;
-  };
+  const getActiveFiltersCount = () => countActiveMarketplaceFilters(filters);
 
   const handleApplyFilters = () => {
+    const error = validateMarketplaceFilters(filters);
+    if (error) {
+      Alert.alert('Error', error);
+      return;
+    }
     setShowFilterModal(false);
     setLoading(true);
-    fetchListings(searchQuery, filters);
+    fetchListings(debouncedSearchQuery, filters);
   };
 
   const handleClearFilters = () => {
-    setFilters({
-      brand_id: '',
-      storage_id: '',
-      condition_id: '',
-      min_price: '',
-      max_price: '',
-    });
+    const cleared = { ...EMPTY_MARKETPLACE_FILTERS };
+    setFilters(cleared);
+    setFilterModels([]);
+    setModelStorages([]);
+    setModelColors([]);
+    setAreas([]);
     setShowFilterModal(false);
     setLoading(true);
-    fetchListings(searchQuery, {
-      brand_id: '',
-      storage_id: '',
-      condition_id: '',
-      min_price: '',
-      max_price: '',
-    });
+    fetchListings(debouncedSearchQuery, cleared);
   };
 
   const handleListingPress = (listingId) => {
@@ -579,6 +540,8 @@ export default function HomeScreen() {
               // Clear storage
               await AsyncStorage.removeItem('authToken');
               await AsyncStorage.removeItem('hasSeenOnboarding');
+              clearFavorites();
+              clearUnreadCount();
               
               // Reset navigation to Login screen
               navigation.dispatch(
@@ -606,43 +569,6 @@ export default function HomeScreen() {
           <View style={[styles.headerTop, getFlexDirection(isRTL, 'row')]}>
             <Text style={[styles.headerTitle, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('home.telefonak')}</Text>
             <View style={[styles.headerRight, getFlexDirection(isRTL, 'row')]}>
-              <View style={styles.languageButtons}>
-                <TouchableOpacity
-                  style={[
-                    styles.languageButton,
-                    { backgroundColor: language === 'en' ? colors.primary : colors.inputBackground },
-                  ]}
-                  onPress={() => changeLanguage('en')}
-                >
-                  <Text style={[
-                    styles.languageButtonText,
-                    { color: language === 'en' ? '#ffffff' : colors.text }
-                  ]}>EN</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.languageButton,
-                    { backgroundColor: language === 'ar' ? colors.primary : colors.inputBackground },
-                  ]}
-                  onPress={() => changeLanguage('ar')}
-                >
-                  <Text style={[
-                    styles.languageButtonText,
-                    { color: language === 'ar' ? '#ffffff' : colors.text }
-                  ]}>AR</Text>
-                </TouchableOpacity>
-              </View>
-              <TouchableOpacity 
-                style={styles.filterButton}
-                onPress={() => setShowFilterModal(true)}
-              >
-                <Ionicons name="funnel-outline" size={24} color={colors.primary} />
-                {getActiveFiltersCount() > 0 && (
-                  <View style={[styles.filterBadge, { backgroundColor: colors.error }]}>
-                    <Text style={styles.filterBadgeText}>{getActiveFiltersCount()}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
               <TouchableOpacity 
                 style={styles.menuButton}
                 onPress={() => setShowMenu(true)}
@@ -651,28 +577,78 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
           </View>
-          <TouchableOpacity
-            style={[styles.searchContainer, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}
-            onPress={handleSearchModalOpen}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="search-outline" size={20} color={colors.textSecondary} style={styles.searchIcon} />
-            <Text style={[styles.searchInput, { color: searchQuery ? colors.text : colors.textSecondary }]}>
-              {searchQuery || t('home.searchMobiles')}
-            </Text>
-            {searchQuery.length > 0 && (
-              <TouchableOpacity
-                onPress={(e) => {
-                  e.stopPropagation();
-                  setSearchQuery('');
-                  fetchListings('', filters);
-                }}
-                style={styles.searchClearButton}
+          <View style={[styles.searchFilterRow, getFlexDirection(isRTL, 'row')]}>
+            <View
+              style={[styles.searchContainer, styles.searchContainerFlex, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}
+            >
+              <Ionicons name="search-outline" size={20} color={colors.textSecondary} style={styles.searchIcon} />
+              <TextInput
+                ref={searchInputRef}
+                style={[styles.searchInput, { color: colors.text }, getTextAlign(isRTL, 'left')]}
+                placeholder={t('home.searchMobiles')}
+                placeholderTextColor={colors.textSecondary}
+                value={searchQuery}
+                onChangeText={handleSearchChange}
+                returnKeyType="search"
+                autoCorrect={false}
+                autoCapitalize="none"
+                clearButtonMode="never"
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={handleClearSearch}
+                  style={styles.searchClearButton}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+                </TouchableOpacity>
+              )}
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.filterEntryButton,
+                {
+                  backgroundColor: getActiveFiltersCount() > 0 ? colors.primary : colors.inputBackground,
+                  borderColor: getActiveFiltersCount() > 0 ? colors.primary : colors.inputBorder,
+                },
+              ]}
+              onPress={() => setShowFilterModal(true)}
+              accessibilityRole="button"
+              accessibilityLabel={t('home.filterTitle')}
+            >
+              <Ionicons
+                name="options-outline"
+                size={18}
+                color={getActiveFiltersCount() > 0 ? '#ffffff' : colors.primary}
+              />
+              <Text
+                style={[
+                  styles.filterEntryButtonText,
+                  { color: getActiveFiltersCount() > 0 ? '#ffffff' : colors.text },
+                ]}
+                numberOfLines={1}
               >
-                <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
+                {t('common.filter')}
+              </Text>
+              {getActiveFiltersCount() > 0 && (
+                <View style={styles.filterEntryBadge}>
+                  <Text style={styles.filterEntryBadgeText}>{getActiveFiltersCount()}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+          {getActiveFiltersCount() > 0 && (
+            <View style={[styles.activeFiltersBar, getFlexDirection(isRTL, 'row')]}>
+              <Text style={[styles.activeFiltersBarText, { color: colors.textSecondary }]}>
+                {getActiveFiltersCount()} {t('home.filterTitle')}
+              </Text>
+              <TouchableOpacity onPress={handleClearFilters} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Text style={[styles.activeFiltersClearText, { color: colors.primary }]}>
+                  {t('home.clearAll')}
+                </Text>
               </TouchableOpacity>
-            )}
-          </TouchableOpacity>
+            </View>
+          )}
         </View>
 
         {/* Scrollable Content */}
@@ -684,19 +660,19 @@ export default function HomeScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
         >
-          {/* Ads Banner */}
-          {ads.length > 0 && (
+          {/* Marketing Banners */}
+          {banners.length > 0 && (
             <View style={styles.adsSection}>
               <View style={styles.adsBannerWrapper}>
-                <ScrollView 
-                  ref={adsScrollRef}
-                  horizontal 
+                <ScrollView
+                  ref={bannersScrollRef}
+                  horizontal
                   showsHorizontalScrollIndicator={false}
                   pagingEnabled
-                  scrollEnabled={originalAdsCount > 1}
-                  onScrollBeginDrag={handleAdsScrollBeginDrag}
-                  onMomentumScrollEnd={handleAdsScrollEnd}
-                  onScrollEndDrag={handleAdsScrollEnd}
+                  scrollEnabled={originalBannerCount > 1}
+                  onScrollBeginDrag={handleBannersScrollBeginDrag}
+                  onMomentumScrollEnd={handleBannersScrollEnd}
+                  onScrollEndDrag={handleBannersScrollEnd}
                   scrollEventThrottle={16}
                   decelerationRate={0.98}
                   snapToInterval={SCREEN_WIDTH - 32}
@@ -705,33 +681,19 @@ export default function HomeScreen() {
                   style={styles.adsScrollView}
                   contentContainerStyle={styles.adsContainer}
                 >
-                  {ads.map((ad, index) => (
-                    <View key={`${ad.id}-${index}`} style={styles.adBanner}>
+                  {banners.map((banner, index) => (
+                    <View key={`${banner.id}-${index}`} style={styles.adBanner}>
                       <View style={styles.adsBannerContainer}>
                         <TouchableOpacity
                           style={styles.adTouchable}
-                          onPress={async () => {
-                            if (ad.link_url) {
-                              try {
-                                const url = ad.link_url.startsWith('http://') || ad.link_url.startsWith('https://')
-                                  ? ad.link_url
-                                  : `https://${ad.link_url}`;
-                                const canOpen = await Linking.canOpenURL(url);
-                                if (canOpen) {
-                                  await Linking.openURL(url);
-                                } else {
-                                  Alert.alert('Error', 'Unable to open this link');
-                                }
-                              } catch (error) {
-                                console.error('Error opening link:', error);
-                                Alert.alert('Error', 'Failed to open link');
-                              }
-                            }
-                          }}
-                          activeOpacity={0.8}
+                          onPress={() =>
+                            handleBannerAction(banner, { navigation, Linking, Alert })
+                          }
+                          activeOpacity={banner.action_type && banner.action_type !== 'none' ? 0.8 : 1}
+                          disabled={!banner.action_type || banner.action_type === 'none'}
                         >
                           <Image
-                            source={{ uri: ad.image_url }}
+                            source={{ uri: banner.image_url }}
                             style={styles.adImage}
                             resizeMode="cover"
                           />
@@ -740,12 +702,31 @@ export default function HomeScreen() {
                     </View>
                   ))}
                 </ScrollView>
-                {/* Fixed AD badge - positioned outside scroll view */}
-                <View style={styles.adBadge}>
-                  <Ionicons name="megaphone" size={12} color="#ffffff" />
-                  <Text style={styles.adBadgeText}>AD</Text>
-                </View>
               </View>
+              {originalBannerCount > 1 && (
+                <View style={styles.bannerDots}>
+                  {Array.from({ length: originalBannerCount }).map((_, i) => {
+                    const activeIndex =
+                      originalBannerCount > 0
+                        ? ((currentBannerIndex % originalBannerCount) + originalBannerCount) %
+                          originalBannerCount
+                        : 0;
+                    return (
+                      <View
+                        key={`banner-dot-${i}`}
+                        style={[
+                          styles.bannerDot,
+                          i === activeIndex && styles.bannerDotActive,
+                          {
+                            backgroundColor:
+                              i === activeIndex ? colors.primary : colors.inputBorder,
+                          },
+                        ]}
+                      />
+                    );
+                  })}
+                </View>
+              )}
             </View>
           )}
 
@@ -768,15 +749,20 @@ export default function HomeScreen() {
                   key={brand.id} 
                   style={styles.categoryItem}
                   onPress={() => {
-                    // Toggle brand filter - if already selected, deselect it
                     const isCurrentlySelected = filters.brand_id === brand.id.toString();
-                    const newFilters = { 
-                      ...filters, 
-                      brand_id: isCurrentlySelected ? '' : brand.id.toString() 
+                    const newFilters = {
+                      ...filters,
+                      brand_id: isCurrentlySelected ? '' : brand.id.toString(),
+                      model_id: '',
+                      model_storage_id: '',
+                      model_color_id: '',
                     };
                     setFilters(newFilters);
+                    setFilterModels([]);
+                    setModelStorages([]);
+                    setModelColors([]);
                     setLoading(true);
-                    fetchListings(searchQuery, newFilters);
+                    fetchListings(debouncedSearchQuery, newFilters);
                   }}
                 >
                   <View style={[
@@ -839,7 +825,22 @@ export default function HomeScreen() {
               </View>
             ) : listings.length === 0 ? (
               <View style={styles.emptyContainer}>
-                <Text style={[styles.emptyText, { color: colors.textSecondary }]}>{t('home.noListings')}</Text>
+                <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                  {getListingsEmptyMessage()}
+                </Text>
+                {debouncedSearchQuery.length > 0 && (
+                  <Text style={[styles.emptySubtext, { color: colors.textSecondary }, getTextAlign(isRTL, 'center')]}>
+                    {t('home.tryDifferentKeywords')}
+                  </Text>
+                )}
+                {countActiveMarketplaceFilters(filters) > 0 && (
+                  <TouchableOpacity
+                    style={[styles.clearFiltersButton, { backgroundColor: colors.primary }]}
+                    onPress={handleClearFilters}
+                  >
+                    <Text style={styles.clearFiltersButtonText}>{t('home.clearFilters') || 'Clear Filters'}</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             ) : (
               <View style={styles.grid}>
@@ -859,6 +860,7 @@ export default function HomeScreen() {
                       ) : (
                         <View style={[styles.cardImage, { backgroundColor: colors.borderLight }]} />
                       )}
+                      <FavoriteButton listingId={listing.id} />
                       <View style={[styles.conditionBadge, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.9)' : 'rgba(0, 0, 0, 0.6)' }]}>
                         <Text style={[styles.conditionText, { color: isDarkMode ? '#09090b' : '#ffffff' }]}>
                           {(() => {
@@ -947,20 +949,12 @@ export default function HomeScreen() {
         transparent={true}
         onRequestClose={() => setShowFilterModal(false)}
         onShow={() => {
-          // Scroll to the end in RTL mode so "All" (which is last in array) is visible on the right immediately
           if (isRTL) {
-            // Use requestAnimationFrame to ensure layout is complete
             requestAnimationFrame(() => {
               setTimeout(() => {
-                if (brandScrollRef.current) {
-                  brandScrollRef.current.scrollToEnd({ animated: false });
-                }
-                if (storageScrollRef.current) {
-                  storageScrollRef.current.scrollToEnd({ animated: false });
-                }
-                if (conditionScrollRef.current) {
-                  conditionScrollRef.current.scrollToEnd({ animated: false });
-                }
+                [categoryScrollRef, brandScrollRef, modelScrollRef, storageScrollRef, colorScrollRef, conditionScrollRef, cityScrollRef, areaScrollRef, sortScrollRef].forEach(ref => {
+                  ref.current?.scrollToEnd({ animated: false });
+                });
               }, 100);
             });
           }
@@ -979,35 +973,114 @@ export default function HomeScreen() {
             </View>
 
             <ScrollView style={styles.filterScroll} showsVerticalScrollIndicator={false}>
-              {/* Brand Filter */}
-              <View style={styles.filterSection}>
-                <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('home.brand')}</Text>
-                <ScrollView 
-                  ref={brandScrollRef}
-                  horizontal 
-                  showsHorizontalScrollIndicator={false} 
+              {/* Category Filter */}
+              <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
+                <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+                  {t('home.category') || 'Category'}
+                </Text>
+                <ScrollView
+                  ref={categoryScrollRef}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
                   style={styles.chipContainer}
                   onLayout={() => {
-                    // Scroll to end when layout is ready in RTL mode
-                    if (isRTL && brandScrollRef.current) {
-                      setTimeout(() => {
-                        brandScrollRef.current?.scrollToEnd({ animated: false });
-                      }, 50);
+                    if (isRTL && categoryScrollRef.current) {
+                      setTimeout(() => categoryScrollRef.current?.scrollToEnd({ animated: false }), 50);
                     }
                   }}
                 >
                   {isRTL ? (
                     <>
-                      {[...brands].reverse().map((brand) => (
+                      {[...categories].reverse().map((cat) => (
+                        <TouchableOpacity
+                          key={cat.id}
+                          style={[
+                            styles.filterChip,
+                            { backgroundColor: filters.category_id === cat.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            filters.category_id === cat.id.toString() && styles.filterChipActive,
+                            { marginRight: 0, marginLeft: 8 },
+                          ]}
+                          onPress={() => handleSelectCategory(cat.id.toString())}
+                        >
+                          <Text style={[styles.filterChipText, { color: filters.category_id === cat.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            {language === 'ar' ? (cat.name_ar || cat.name_en || cat.name) : (cat.name_en || cat.name)}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                      <TouchableOpacity
+                        style={[
+                          styles.filterChip,
+                          { backgroundColor: filters.category_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          filters.category_id === '' && styles.filterChipActive,
+                          { marginRight: 0, marginLeft: 8 },
+                        ]}
+                        onPress={() => handleSelectCategory('')}
+                      >
+                        <Text style={[styles.filterChipText, { color: filters.category_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          {t('home.all')}
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <>
+                      <TouchableOpacity
+                        style={[
+                          styles.filterChip,
+                          { backgroundColor: filters.category_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          filters.category_id === '' && styles.filterChipActive,
+                        ]}
+                        onPress={() => handleSelectCategory('')}
+                      >
+                        <Text style={[styles.filterChipText, { color: filters.category_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          {t('home.all')}
+                        </Text>
+                      </TouchableOpacity>
+                      {categories.map((cat) => (
+                        <TouchableOpacity
+                          key={cat.id}
+                          style={[
+                            styles.filterChip,
+                            { backgroundColor: filters.category_id === cat.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            filters.category_id === cat.id.toString() && styles.filterChipActive,
+                          ]}
+                          onPress={() => handleSelectCategory(cat.id.toString())}
+                        >
+                          <Text style={[styles.filterChipText, { color: filters.category_id === cat.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            {language === 'ar' ? (cat.name_ar || cat.name_en || cat.name) : (cat.name_en || cat.name)}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </>
+                  )}
+                </ScrollView>
+              </View>
+
+              {/* Brand Filter */}
+              <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
+                <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('home.brand')}</Text>
+                <ScrollView
+                  ref={brandScrollRef}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.chipContainer}
+                  onLayout={() => {
+                    if (isRTL && brandScrollRef.current) {
+                      setTimeout(() => brandScrollRef.current?.scrollToEnd({ animated: false }), 50);
+                    }
+                  }}
+                >
+                  {isRTL ? (
+                    <>
+                      {[...filterBrands].reverse().map((brand) => (
                         <TouchableOpacity
                           key={brand.id}
                           style={[
-                            styles.filterChip, 
+                            styles.filterChip,
                             { backgroundColor: filters.brand_id === brand.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
                             filters.brand_id === brand.id.toString() && styles.filterChipActive,
-                            { marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }
+                            { marginRight: 0, marginLeft: 8 },
                           ]}
-                          onPress={() => setFilters({ ...filters, brand_id: brand.id.toString() })}
+                          onPress={() => handleSelectBrand(brand.id.toString())}
                         >
                           <Text style={[styles.filterChipText, { color: filters.brand_id === brand.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {brand.name}
@@ -1016,12 +1089,12 @@ export default function HomeScreen() {
                       ))}
                       <TouchableOpacity
                         style={[
-                          styles.filterChip, 
+                          styles.filterChip,
                           { backgroundColor: filters.brand_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
                           filters.brand_id === '' && styles.filterChipActive,
-                          { marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }
+                          { marginRight: 0, marginLeft: 8 },
                         ]}
-                        onPress={() => setFilters({ ...filters, brand_id: '' })}
+                        onPress={() => handleSelectBrand('')}
                       >
                         <Text style={[styles.filterChipText, { color: filters.brand_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
@@ -1032,25 +1105,25 @@ export default function HomeScreen() {
                     <>
                       <TouchableOpacity
                         style={[
-                          styles.filterChip, 
+                          styles.filterChip,
                           { backgroundColor: filters.brand_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.brand_id === '' && styles.filterChipActive
+                          filters.brand_id === '' && styles.filterChipActive,
                         ]}
-                        onPress={() => setFilters({ ...filters, brand_id: '' })}
+                        onPress={() => handleSelectBrand('')}
                       >
                         <Text style={[styles.filterChipText, { color: filters.brand_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
                         </Text>
                       </TouchableOpacity>
-                      {brands.map((brand) => (
+                      {filterBrands.map((brand) => (
                         <TouchableOpacity
                           key={brand.id}
                           style={[
-                            styles.filterChip, 
+                            styles.filterChip,
                             { backgroundColor: filters.brand_id === brand.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.brand_id === brand.id.toString() && styles.filterChipActive
+                            filters.brand_id === brand.id.toString() && styles.filterChipActive,
                           ]}
-                          onPress={() => setFilters({ ...filters, brand_id: brand.id.toString() })}
+                          onPress={() => handleSelectBrand(brand.id.toString())}
                         >
                           <Text style={[styles.filterChipText, { color: filters.brand_id === brand.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {brand.name}
@@ -1062,103 +1135,285 @@ export default function HomeScreen() {
                 </ScrollView>
               </View>
 
-              {/* Storage Filter */}
-              <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
-                <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('home.storage')}</Text>
-                <ScrollView 
-                  ref={storageScrollRef}
-                  horizontal 
-                  showsHorizontalScrollIndicator={false} 
-                  style={styles.chipContainer}
-                  onLayout={() => {
-                    // Scroll to end when layout is ready in RTL mode
-                    if (isRTL && storageScrollRef.current) {
-                      setTimeout(() => {
-                        storageScrollRef.current?.scrollToEnd({ animated: false });
-                      }, 50);
-                    }
-                  }}
-                >
-                  {isRTL ? (
-                    <>
-                      {[...storageOptions].reverse().map((storage) => (
-                        <TouchableOpacity
-                          key={storage.id}
-                          style={[
-                            styles.filterChip, 
-                            { backgroundColor: filters.storage_id === storage.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.storage_id === storage.id.toString() && styles.filterChipActive,
-                            { marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }
-                          ]}
-                          onPress={() => setFilters({ ...filters, storage_id: storage.id.toString() })}
-                        >
-                          <Text style={[styles.filterChipText, { color: filters.storage_id === storage.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
-                            {storage.capacity_gb} GB
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                      <TouchableOpacity
-                        style={[
-                          styles.filterChip, 
-                          { backgroundColor: filters.storage_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.storage_id === '' && styles.filterChipActive,
-                          { marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }
-                        ]}
-                        onPress={() => setFilters({ ...filters, storage_id: '' })}
-                      >
-                        <Text style={[styles.filterChipText, { color: filters.storage_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
-                          {t('home.all')}
-                        </Text>
-                      </TouchableOpacity>
-                    </>
+              {/* Model Filter — only when brand selected */}
+              {filters.brand_id !== '' && (
+                <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
+                  <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+                    {t('home.model') || 'Model'}
+                  </Text>
+                  {filterModels.length === 0 ? (
+                    <Text style={[styles.filterChipText, { color: colors.textSecondary }]}>—</Text>
                   ) : (
-                    <>
-                      <TouchableOpacity
-                        style={[
-                          styles.filterChip, 
-                          { backgroundColor: filters.storage_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.storage_id === '' && styles.filterChipActive
-                        ]}
-                        onPress={() => setFilters({ ...filters, storage_id: '' })}
-                      >
-                        <Text style={[styles.filterChipText, { color: filters.storage_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
-                          {t('home.all')}
-                        </Text>
-                      </TouchableOpacity>
-                      {storageOptions.map((storage) => (
-                        <TouchableOpacity
-                          key={storage.id}
-                          style={[
-                            styles.filterChip, 
-                            { backgroundColor: filters.storage_id === storage.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.storage_id === storage.id.toString() && styles.filterChipActive
-                          ]}
-                          onPress={() => setFilters({ ...filters, storage_id: storage.id.toString() })}
-                        >
-                          <Text style={[styles.filterChipText, { color: filters.storage_id === storage.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
-                            {storage.capacity_gb} GB
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </>
+                    <ScrollView
+                      ref={modelScrollRef}
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      style={styles.chipContainer}
+                      onLayout={() => {
+                        if (isRTL && modelScrollRef.current) {
+                          setTimeout(() => modelScrollRef.current?.scrollToEnd({ animated: false }), 50);
+                        }
+                      }}
+                    >
+                      {isRTL ? (
+                        <>
+                          {[...filterModels].reverse().map((model) => (
+                            <TouchableOpacity
+                              key={model.id}
+                              style={[
+                                styles.filterChip,
+                                { backgroundColor: filters.model_id === model.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                filters.model_id === model.id.toString() && styles.filterChipActive,
+                                { marginRight: 0, marginLeft: 8 },
+                              ]}
+                              onPress={() => handleSelectModel(model.id.toString())}
+                            >
+                              <Text style={[styles.filterChipText, { color: filters.model_id === model.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                                {model.name}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                          <TouchableOpacity
+                            style={[
+                              styles.filterChip,
+                              { backgroundColor: filters.model_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              filters.model_id === '' && styles.filterChipActive,
+                              { marginRight: 0, marginLeft: 8 },
+                            ]}
+                            onPress={() => handleSelectModel('')}
+                          >
+                            <Text style={[styles.filterChipText, { color: filters.model_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              {t('home.all')}
+                            </Text>
+                          </TouchableOpacity>
+                        </>
+                      ) : (
+                        <>
+                          <TouchableOpacity
+                            style={[
+                              styles.filterChip,
+                              { backgroundColor: filters.model_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              filters.model_id === '' && styles.filterChipActive,
+                            ]}
+                            onPress={() => handleSelectModel('')}
+                          >
+                            <Text style={[styles.filterChipText, { color: filters.model_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              {t('home.all')}
+                            </Text>
+                          </TouchableOpacity>
+                          {filterModels.map((model) => (
+                            <TouchableOpacity
+                              key={model.id}
+                              style={[
+                                styles.filterChip,
+                                { backgroundColor: filters.model_id === model.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                filters.model_id === model.id.toString() && styles.filterChipActive,
+                              ]}
+                              onPress={() => handleSelectModel(model.id.toString())}
+                            >
+                              <Text style={[styles.filterChipText, { color: filters.model_id === model.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                                {model.name}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </>
+                      )}
+                    </ScrollView>
                   )}
-                </ScrollView>
-              </View>
+                </View>
+              )}
+
+              {/* Storage Filter — only when model selected */}
+              {filters.model_id !== '' && (
+                <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
+                  <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+                    {t('home.storage') || 'Storage'}
+                  </Text>
+                  {modelStorages.length === 0 ? (
+                    <Text style={[styles.filterChipText, { color: colors.textSecondary }]}>
+                      {t('home.selectModelForStorage') || 'Select a model first'}
+                    </Text>
+                  ) : (
+                    <ScrollView
+                      ref={storageScrollRef}
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      style={styles.chipContainer}
+                      onLayout={() => {
+                        if (isRTL && storageScrollRef.current) {
+                          setTimeout(() => storageScrollRef.current?.scrollToEnd({ animated: false }), 50);
+                        }
+                      }}
+                    >
+                      {isRTL ? (
+                        <>
+                          {[...modelStorages].reverse().map((s) => (
+                            <TouchableOpacity
+                              key={s.id}
+                              style={[
+                                styles.filterChip,
+                                { backgroundColor: filters.model_storage_id === s.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                filters.model_storage_id === s.id.toString() && styles.filterChipActive,
+                                { marginRight: 0, marginLeft: 8 },
+                              ]}
+                              onPress={() => setFilters(prev => ({ ...prev, model_storage_id: s.id.toString() }))}
+                            >
+                              <Text style={[styles.filterChipText, { color: filters.model_storage_id === s.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                                {s.label || s.capacity_gb ? `${s.capacity_gb} GB` : s.label}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                          <TouchableOpacity
+                            style={[
+                              styles.filterChip,
+                              { backgroundColor: filters.model_storage_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              filters.model_storage_id === '' && styles.filterChipActive,
+                              { marginRight: 0, marginLeft: 8 },
+                            ]}
+                            onPress={() => setFilters(prev => ({ ...prev, model_storage_id: '' }))}
+                          >
+                            <Text style={[styles.filterChipText, { color: filters.model_storage_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              {t('home.all')}
+                            </Text>
+                          </TouchableOpacity>
+                        </>
+                      ) : (
+                        <>
+                          <TouchableOpacity
+                            style={[
+                              styles.filterChip,
+                              { backgroundColor: filters.model_storage_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              filters.model_storage_id === '' && styles.filterChipActive,
+                            ]}
+                            onPress={() => setFilters(prev => ({ ...prev, model_storage_id: '' }))}
+                          >
+                            <Text style={[styles.filterChipText, { color: filters.model_storage_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              {t('home.all')}
+                            </Text>
+                          </TouchableOpacity>
+                          {modelStorages.map((s) => (
+                            <TouchableOpacity
+                              key={s.id}
+                              style={[
+                                styles.filterChip,
+                                { backgroundColor: filters.model_storage_id === s.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                filters.model_storage_id === s.id.toString() && styles.filterChipActive,
+                              ]}
+                              onPress={() => setFilters(prev => ({ ...prev, model_storage_id: s.id.toString() }))}
+                            >
+                              <Text style={[styles.filterChipText, { color: filters.model_storage_id === s.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                                {s.label || (s.capacity_gb ? `${s.capacity_gb} GB` : String(s.id))}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </>
+                      )}
+                    </ScrollView>
+                  )}
+                </View>
+              )}
+
+              {/* Color Filter — only when model selected */}
+              {filters.model_id !== '' && (
+                <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
+                  <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+                    {t('home.color') || 'Color'}
+                  </Text>
+                  {modelColors.length === 0 ? (
+                    <Text style={[styles.filterChipText, { color: colors.textSecondary }]}>
+                      {t('home.selectModelForColor') || 'Select a model first'}
+                    </Text>
+                  ) : (
+                    <ScrollView
+                      ref={colorScrollRef}
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      style={styles.chipContainer}
+                      onLayout={() => {
+                        if (isRTL && colorScrollRef.current) {
+                          setTimeout(() => colorScrollRef.current?.scrollToEnd({ animated: false }), 50);
+                        }
+                      }}
+                    >
+                      {isRTL ? (
+                        <>
+                          {[...modelColors].reverse().map((c) => (
+                            <TouchableOpacity
+                              key={c.id}
+                              style={[
+                                styles.filterChip,
+                                { backgroundColor: filters.model_color_id === c.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                filters.model_color_id === c.id.toString() && styles.filterChipActive,
+                                { marginRight: 0, marginLeft: 8 },
+                              ]}
+                              onPress={() => setFilters(prev => ({ ...prev, model_color_id: c.id.toString() }))}
+                            >
+                              <Text style={[styles.filterChipText, { color: filters.model_color_id === c.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                                {c.display_name || c.name}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                          <TouchableOpacity
+                            style={[
+                              styles.filterChip,
+                              { backgroundColor: filters.model_color_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              filters.model_color_id === '' && styles.filterChipActive,
+                              { marginRight: 0, marginLeft: 8 },
+                            ]}
+                            onPress={() => setFilters(prev => ({ ...prev, model_color_id: '' }))}
+                          >
+                            <Text style={[styles.filterChipText, { color: filters.model_color_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              {t('home.all')}
+                            </Text>
+                          </TouchableOpacity>
+                        </>
+                      ) : (
+                        <>
+                          <TouchableOpacity
+                            style={[
+                              styles.filterChip,
+                              { backgroundColor: filters.model_color_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              filters.model_color_id === '' && styles.filterChipActive,
+                            ]}
+                            onPress={() => setFilters(prev => ({ ...prev, model_color_id: '' }))}
+                          >
+                            <Text style={[styles.filterChipText, { color: filters.model_color_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              {t('home.all')}
+                            </Text>
+                          </TouchableOpacity>
+                          {modelColors.map((c) => (
+                            <TouchableOpacity
+                              key={c.id}
+                              style={[
+                                styles.filterChip,
+                                { backgroundColor: filters.model_color_id === c.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                filters.model_color_id === c.id.toString() && styles.filterChipActive,
+                              ]}
+                              onPress={() => setFilters(prev => ({ ...prev, model_color_id: c.id.toString() }))}
+                            >
+                              <Text style={[styles.filterChipText, { color: filters.model_color_id === c.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                                {c.display_name || c.name}
+                              </Text>
+                            </TouchableOpacity>
+                          ))}
+                        </>
+                      )}
+                    </ScrollView>
+                  )}
+                </View>
+              )}
 
               {/* Condition Filter */}
               <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
                 <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('home.condition')}</Text>
-                <ScrollView 
+                <ScrollView
                   ref={conditionScrollRef}
-                  horizontal 
-                  showsHorizontalScrollIndicator={false} 
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
                   style={styles.chipContainer}
                   onLayout={() => {
-                    // Scroll to end when layout is ready in RTL mode
                     if (isRTL && conditionScrollRef.current) {
-                      setTimeout(() => {
-                        conditionScrollRef.current?.scrollToEnd({ animated: false });
-                      }, 50);
+                      setTimeout(() => conditionScrollRef.current?.scrollToEnd({ animated: false }), 50);
                     }
                   }}
                 >
@@ -1168,43 +1423,30 @@ export default function HomeScreen() {
                         <TouchableOpacity
                           key={condition.id}
                           style={[
-                            styles.filterChip, 
+                            styles.filterChip,
                             { backgroundColor: filters.condition_id === condition.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
                             filters.condition_id === condition.id.toString() && styles.filterChipActive,
-                            { marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }
+                            { marginRight: 0, marginLeft: 8 },
                           ]}
-                          onPress={() => setFilters({ ...filters, condition_id: condition.id.toString() })}
+                          onPress={() => setFilters(prev => ({ ...prev, condition_id: condition.id.toString() }))}
                         >
                           <Text style={[styles.filterChipText, { color: filters.condition_id === condition.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {(() => {
-                              const conditionKey = condition.name?.toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
-                              const conditionMap = {
-                                'new': t('conditions.new'),
-                                'likenew': t('conditions.likeNew'),
-                                'usedlikenew': t('conditions.usedlikenew'),
-                                'usedgood': t('conditions.usedgood'),
-                                'usedfair': t('conditions.usedfair'),
-                                'excellent': t('conditions.excellent'),
-                                'verygood': t('conditions.veryGood'),
-                                'good': t('conditions.good'),
-                                'fair': t('conditions.fair'),
-                                'poor': t('conditions.poor'),
-                                'used': t('conditions.used'),
-                                'refurbished': t('conditions.refurbished'),
-                              };
-                              return conditionMap[conditionKey] || condition.name || '';
+                              const k = condition.name?.toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
+                              const map = { new: t('conditions.new'), likenew: t('conditions.likeNew'), usedlikenew: t('conditions.usedlikenew'), usedgood: t('conditions.usedgood'), usedfair: t('conditions.usedfair'), excellent: t('conditions.excellent'), verygood: t('conditions.veryGood'), good: t('conditions.good'), fair: t('conditions.fair'), poor: t('conditions.poor'), used: t('conditions.used'), refurbished: t('conditions.refurbished') };
+                              return map[k] || condition.name || '';
                             })()}
                           </Text>
                         </TouchableOpacity>
                       ))}
                       <TouchableOpacity
                         style={[
-                          styles.filterChip, 
+                          styles.filterChip,
                           { backgroundColor: filters.condition_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
                           filters.condition_id === '' && styles.filterChipActive,
-                          { marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }
+                          { marginRight: 0, marginLeft: 8 },
                         ]}
-                        onPress={() => setFilters({ ...filters, condition_id: '' })}
+                        onPress={() => setFilters(prev => ({ ...prev, condition_id: '' }))}
                       >
                         <Text style={[styles.filterChipText, { color: filters.condition_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
@@ -1215,11 +1457,11 @@ export default function HomeScreen() {
                     <>
                       <TouchableOpacity
                         style={[
-                          styles.filterChip, 
+                          styles.filterChip,
                           { backgroundColor: filters.condition_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.condition_id === '' && styles.filterChipActive
+                          filters.condition_id === '' && styles.filterChipActive,
                         ]}
-                        onPress={() => setFilters({ ...filters, condition_id: '' })}
+                        onPress={() => setFilters(prev => ({ ...prev, condition_id: '' }))}
                       >
                         <Text style={[styles.filterChipText, { color: filters.condition_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
@@ -1229,30 +1471,17 @@ export default function HomeScreen() {
                         <TouchableOpacity
                           key={condition.id}
                           style={[
-                            styles.filterChip, 
+                            styles.filterChip,
                             { backgroundColor: filters.condition_id === condition.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.condition_id === condition.id.toString() && styles.filterChipActive
+                            filters.condition_id === condition.id.toString() && styles.filterChipActive,
                           ]}
-                          onPress={() => setFilters({ ...filters, condition_id: condition.id.toString() })}
+                          onPress={() => setFilters(prev => ({ ...prev, condition_id: condition.id.toString() }))}
                         >
                           <Text style={[styles.filterChipText, { color: filters.condition_id === condition.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {(() => {
-                              const conditionKey = condition.name?.toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
-                              const conditionMap = {
-                                'new': t('conditions.new'),
-                                'likenew': t('conditions.likeNew'),
-                                'usedlikenew': t('conditions.usedlikenew'),
-                                'usedgood': t('conditions.usedgood'),
-                                'usedfair': t('conditions.usedfair'),
-                                'excellent': t('conditions.excellent'),
-                                'verygood': t('conditions.veryGood'),
-                                'good': t('conditions.good'),
-                                'fair': t('conditions.fair'),
-                                'poor': t('conditions.poor'),
-                                'used': t('conditions.used'),
-                                'refurbished': t('conditions.refurbished'),
-                              };
-                              return conditionMap[conditionKey] || condition.name || '';
+                              const k = condition.name?.toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
+                              const map = { new: t('conditions.new'), likenew: t('conditions.likeNew'), usedlikenew: t('conditions.usedlikenew'), usedgood: t('conditions.usedgood'), usedfair: t('conditions.usedfair'), excellent: t('conditions.excellent'), verygood: t('conditions.veryGood'), good: t('conditions.good'), fair: t('conditions.fair'), poor: t('conditions.poor'), used: t('conditions.used'), refurbished: t('conditions.refurbished') };
+                              return map[k] || condition.name || '';
                             })()}
                           </Text>
                         </TouchableOpacity>
@@ -1268,9 +1497,7 @@ export default function HomeScreen() {
                   <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('home.priceRange')}</Text>
                   {(filters.min_price || filters.max_price) && (
                     <TouchableOpacity
-                      onPress={() => {
-                        setFilters({ ...filters, min_price: '', max_price: '' });
-                      }}
+                      onPress={() => setFilters(prev => ({ ...prev, min_price: '', max_price: '' }))}
                       style={styles.priceClearButton}
                     >
                       <Ionicons name="close-circle" size={18} color={colors.primary} />
@@ -1286,7 +1513,7 @@ export default function HomeScreen() {
                       placeholderTextColor={colors.textSecondary}
                       keyboardType="numeric"
                       value={filters.min_price}
-                      onChangeText={(text) => setFilters({ ...filters, min_price: text })}
+                      onChangeText={(text) => setFilters(prev => ({ ...prev, min_price: text }))}
                     />
                   </View>
                   <Text style={[styles.priceSeparator, { color: colors.textSecondary }]}>-</Text>
@@ -1298,10 +1525,272 @@ export default function HomeScreen() {
                       placeholderTextColor={colors.textSecondary}
                       keyboardType="numeric"
                       value={filters.max_price}
-                      onChangeText={(text) => setFilters({ ...filters, max_price: text })}
+                      onChangeText={(text) => setFilters(prev => ({ ...prev, max_price: text }))}
                     />
                   </View>
                 </View>
+              </View>
+
+              {/* Battery Filter — only for phones category */}
+              {(() => {
+                const selectedCat = categories.find(c => c.id.toString() === filters.category_id);
+                if (!selectedCat || selectedCat.slug !== 'phones') return null;
+                return (
+                  <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
+                    <View style={[styles.filterLabelRow, getFlexDirection(isRTL, 'row')]}>
+                      <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+                        {t('home.batteryHealth') || 'Battery Health (%)'}
+                      </Text>
+                      {(filters.min_battery || filters.max_battery) && (
+                        <TouchableOpacity
+                          onPress={() => setFilters(prev => ({ ...prev, min_battery: '', max_battery: '' }))}
+                          style={styles.priceClearButton}
+                        >
+                          <Ionicons name="close-circle" size={18} color={colors.primary} />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                    <View style={[styles.priceInputContainer, getFlexDirection(isRTL, 'row')]}>
+                      <View style={styles.priceInputWrapper}>
+                        <Text style={[styles.priceInputLabel, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>
+                          {t('home.minBattery') || 'Min %'}
+                        </Text>
+                        <TextInput
+                          style={[styles.priceInput, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder, color: colors.text }, getTextAlign(isRTL, 'auto')]}
+                          placeholder="0"
+                          placeholderTextColor={colors.textSecondary}
+                          keyboardType="numeric"
+                          value={filters.min_battery}
+                          onChangeText={(text) => setFilters(prev => ({ ...prev, min_battery: text }))}
+                        />
+                      </View>
+                      <Text style={[styles.priceSeparator, { color: colors.textSecondary }]}>-</Text>
+                      <View style={styles.priceInputWrapper}>
+                        <Text style={[styles.priceInputLabel, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>
+                          {t('home.maxBattery') || 'Max %'}
+                        </Text>
+                        <TextInput
+                          style={[styles.priceInput, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder, color: colors.text }, getTextAlign(isRTL, 'auto')]}
+                          placeholder="100"
+                          placeholderTextColor={colors.textSecondary}
+                          keyboardType="numeric"
+                          value={filters.max_battery}
+                          onChangeText={(text) => setFilters(prev => ({ ...prev, max_battery: text }))}
+                        />
+                      </View>
+                    </View>
+                  </View>
+                );
+              })()}
+
+              {/* City Filter */}
+              <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
+                <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+                  {t('home.city') || 'City'}
+                </Text>
+                <ScrollView
+                  ref={cityScrollRef}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.chipContainer}
+                  onLayout={() => {
+                    if (isRTL && cityScrollRef.current) {
+                      setTimeout(() => cityScrollRef.current?.scrollToEnd({ animated: false }), 50);
+                    }
+                  }}
+                >
+                  {isRTL ? (
+                    <>
+                      {[...cities].reverse().map((city) => (
+                        <TouchableOpacity
+                          key={city.id}
+                          style={[
+                            styles.filterChip,
+                            { backgroundColor: filters.city_id === city.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            filters.city_id === city.id.toString() && styles.filterChipActive,
+                            { marginRight: 0, marginLeft: 8 },
+                          ]}
+                          onPress={() => handleSelectCity(city.id.toString())}
+                        >
+                          <Text style={[styles.filterChipText, { color: filters.city_id === city.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            {localizedPlaceName(city, language)}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                      <TouchableOpacity
+                        style={[
+                          styles.filterChip,
+                          { backgroundColor: filters.city_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          filters.city_id === '' && styles.filterChipActive,
+                          { marginRight: 0, marginLeft: 8 },
+                        ]}
+                        onPress={() => handleSelectCity('')}
+                      >
+                        <Text style={[styles.filterChipText, { color: filters.city_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          {t('home.all')}
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <>
+                      <TouchableOpacity
+                        style={[
+                          styles.filterChip,
+                          { backgroundColor: filters.city_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          filters.city_id === '' && styles.filterChipActive,
+                        ]}
+                        onPress={() => handleSelectCity('')}
+                      >
+                        <Text style={[styles.filterChipText, { color: filters.city_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          {t('home.all')}
+                        </Text>
+                      </TouchableOpacity>
+                      {cities.map((city) => (
+                        <TouchableOpacity
+                          key={city.id}
+                          style={[
+                            styles.filterChip,
+                            { backgroundColor: filters.city_id === city.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            filters.city_id === city.id.toString() && styles.filterChipActive,
+                          ]}
+                          onPress={() => handleSelectCity(city.id.toString())}
+                        >
+                          <Text style={[styles.filterChipText, { color: filters.city_id === city.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            {localizedPlaceName(city, language)}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </>
+                  )}
+                </ScrollView>
+              </View>
+
+              {/* Area Filter — only when city selected */}
+              {filters.city_id !== '' && areas.length > 0 && (
+                <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
+                  <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+                    {t('home.area') || 'Area'}
+                  </Text>
+                  <ScrollView
+                    ref={areaScrollRef}
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    style={styles.chipContainer}
+                    onLayout={() => {
+                      if (isRTL && areaScrollRef.current) {
+                        setTimeout(() => areaScrollRef.current?.scrollToEnd({ animated: false }), 50);
+                      }
+                    }}
+                  >
+                    {isRTL ? (
+                      <>
+                        {[...areas].reverse().map((area) => (
+                          <TouchableOpacity
+                            key={area.id}
+                            style={[
+                              styles.filterChip,
+                              { backgroundColor: filters.area_id === area.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              filters.area_id === area.id.toString() && styles.filterChipActive,
+                              { marginRight: 0, marginLeft: 8 },
+                            ]}
+                            onPress={() => setFilters(prev => ({ ...prev, area_id: area.id.toString() }))}
+                          >
+                            <Text style={[styles.filterChipText, { color: filters.area_id === area.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              {localizedPlaceName(area, language)}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                        <TouchableOpacity
+                          style={[
+                            styles.filterChip,
+                            { backgroundColor: filters.area_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            filters.area_id === '' && styles.filterChipActive,
+                            { marginRight: 0, marginLeft: 8 },
+                          ]}
+                          onPress={() => setFilters(prev => ({ ...prev, area_id: '' }))}
+                        >
+                          <Text style={[styles.filterChipText, { color: filters.area_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            {t('home.all')}
+                          </Text>
+                        </TouchableOpacity>
+                      </>
+                    ) : (
+                      <>
+                        <TouchableOpacity
+                          style={[
+                            styles.filterChip,
+                            { backgroundColor: filters.area_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            filters.area_id === '' && styles.filterChipActive,
+                          ]}
+                          onPress={() => setFilters(prev => ({ ...prev, area_id: '' }))}
+                        >
+                          <Text style={[styles.filterChipText, { color: filters.area_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            {t('home.all')}
+                          </Text>
+                        </TouchableOpacity>
+                        {areas.map((area) => (
+                          <TouchableOpacity
+                            key={area.id}
+                            style={[
+                              styles.filterChip,
+                              { backgroundColor: filters.area_id === area.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              filters.area_id === area.id.toString() && styles.filterChipActive,
+                            ]}
+                            onPress={() => setFilters(prev => ({ ...prev, area_id: area.id.toString() }))}
+                          >
+                            <Text style={[styles.filterChipText, { color: filters.area_id === area.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              {localizedPlaceName(area, language)}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                      </>
+                    )}
+                  </ScrollView>
+                </View>
+              )}
+
+              {/* Sort Filter */}
+              <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
+                <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+                  {t('home.sort') || 'Sort'}
+                </Text>
+                <ScrollView
+                  ref={sortScrollRef}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.chipContainer}
+                  onLayout={() => {
+                    if (isRTL && sortScrollRef.current) {
+                      setTimeout(() => sortScrollRef.current?.scrollToEnd({ animated: false }), 50);
+                    }
+                  }}
+                >
+                  {(() => {
+                    const sortOptions = [
+                      { value: 'newest', label: t('home.newest') || 'Newest' },
+                      { value: 'oldest', label: t('home.oldest') || 'Oldest' },
+                      { value: 'price_asc', label: t('home.lowestPrice') || 'Lowest Price' },
+                      { value: 'price_desc', label: t('home.highestPrice') || 'Highest Price' },
+                    ];
+                    const items = isRTL ? [...sortOptions].reverse() : sortOptions;
+                    return items.map((opt) => (
+                      <TouchableOpacity
+                        key={opt.value}
+                        style={[
+                          styles.filterChip,
+                          { backgroundColor: filters.sort === opt.value ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          filters.sort === opt.value && styles.filterChipActive,
+                          isRTL ? { marginRight: 0, marginLeft: 8 } : {},
+                        ]}
+                        onPress={() => setFilters(prev => ({ ...prev, sort: opt.value }))}
+                      >
+                        <Text style={[styles.filterChipText, { color: filters.sort === opt.value ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          {opt.label}
+                        </Text>
+                      </TouchableOpacity>
+                    ));
+                  })()}
+                </ScrollView>
               </View>
             </ScrollView>
 
@@ -1322,127 +1811,6 @@ export default function HomeScreen() {
             </View>
           </View>
         </KeyboardAvoidingView>
-      </Modal>
-
-      {/* Search Modal */}
-      <Modal
-        visible={showSearchModal}
-        animationType="slide"
-        transparent={false}
-        onRequestClose={handleSearchModalClose}
-      >
-        <View style={[styles.searchModalContainer, { backgroundColor: colors.background, paddingTop: insets.top }]}>
-          {/* Search Header */}
-          <View style={[styles.searchModalHeader, { backgroundColor: colors.surface, borderBottomColor: colors.borderLight }]}>
-            <View style={[styles.searchModalInputContainer, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}>
-              <Ionicons name="search-outline" size={20} color={colors.textSecondary} style={styles.searchIcon} />
-              <TextInput
-                ref={searchInputRef}
-                style={[styles.searchModalInput, { color: colors.text }]}
-                placeholder="Search mobiles..."
-                placeholderTextColor={colors.textSecondary}
-                value={searchModalQuery}
-                onChangeText={handleSearchModalChange}
-                onSubmitEditing={handleSearchModalSubmit}
-                returnKeyType="search"
-                autoFocus
-              />
-              {searchModalQuery.length > 0 && (
-                <TouchableOpacity
-                  onPress={() => handleSearchModalChange('')}
-                  style={styles.searchModalClearButton}
-                >
-                  <Ionicons name="close-circle" size={20} color={colors.textSecondary} />
-                </TouchableOpacity>
-              )}
-            </View>
-            <TouchableOpacity
-              onPress={handleSearchModalClose}
-              style={styles.searchModalCancelButton}
-            >
-              <Text style={[styles.searchModalCancelText, { color: colors.primary }]}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Search Results */}
-          <ScrollView
-            style={styles.searchModalResults}
-            contentContainerStyle={styles.searchModalResultsContent}
-            keyboardShouldPersistTaps="handled"
-          >
-            {searchLoading ? (
-              <View style={styles.searchLoadingContainer}>
-                <ActivityIndicator size="large" color={colors.primary} />
-              </View>
-            ) : searchModalQuery.trim() && searchResults.length === 0 ? (
-              <View style={styles.searchEmptyContainer}>
-                <Ionicons name="search-outline" size={64} color={colors.textSecondary} />
-                <Text style={[styles.searchEmptyText, { color: colors.text }, getTextAlign(isRTL, 'center')]}>{t('home.noSearchResults')}</Text>
-                <Text style={[styles.searchEmptySubtext, { color: colors.textSecondary }, getTextAlign(isRTL, 'center')]}>
-                  {t('home.tryDifferentKeywords')}
-                </Text>
-              </View>
-            ) : !searchModalQuery.trim() ? (
-              <View style={styles.searchEmptyContainer}>
-                <Ionicons name="search-outline" size={64} color={colors.textSecondary} />
-                <Text style={[styles.searchEmptyText, { color: colors.text }, getTextAlign(isRTL, 'center')]}>{t('home.startTypingToSearch')}</Text>
-                <Text style={[styles.searchEmptySubtext, { color: colors.textSecondary }, getTextAlign(isRTL, 'center')]}>
-                  {t('home.searchForPhones')}
-                </Text>
-              </View>
-            ) : (
-              <View style={styles.searchResultsGrid}>
-                {searchResults.map((listing) => (
-                  <TouchableOpacity
-                    key={listing.id}
-                    style={[styles.card, { backgroundColor: colors.surface }]}
-                    onPress={() => handleSearchResultPress(listing.id)}
-                  >
-                    <View style={styles.cardImageContainer}>
-                      {listing.thumbnail_image ? (
-                        <Image
-                          source={{ uri: listing.thumbnail_image }}
-                          style={styles.cardImage}
-                          resizeMode="cover"
-                        />
-                      ) : (
-                        <View style={[styles.cardImage, { backgroundColor: colors.borderLight }]} />
-                      )}
-                      <View style={[styles.conditionBadge, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.9)' : 'rgba(0, 0, 0, 0.6)' }]}>
-                        <Text style={[styles.conditionText, { color: isDarkMode ? '#09090b' : '#ffffff' }]}>
-                          {(() => {
-                            const conditionKey = listing.condition_name?.toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
-                            const conditionMap = {
-                              'new': t('conditions.new'),
-                              'likenew': t('conditions.likeNew'),
-                              'usedlikenew': t('conditions.usedlikenew'),
-                              'usedgood': t('conditions.usedgood'),
-                              'usedfair': t('conditions.usedfair'),
-                              'excellent': t('conditions.excellent'),
-                              'verygood': t('conditions.veryGood'),
-                              'good': t('conditions.good'),
-                              'fair': t('conditions.fair'),
-                              'poor': t('conditions.poor'),
-                              'used': t('conditions.used'),
-                              'refurbished': t('conditions.refurbished'),
-                            };
-                            return conditionMap[conditionKey] || listing.condition_name || '';
-                          })()}
-                        </Text>
-                      </View>
-                    </View>
-                    <View style={styles.cardContent}>
-                      <Text style={[styles.cardTitle, { color: colors.text }]} numberOfLines={1}>
-                        {listing.brand_name} {listing.model_name}
-                      </Text>
-                      <Text style={[styles.cardPrice, { color: colors.primary }]}>{listing.price} JOD</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
-          </ScrollView>
-        </View>
       </Modal>
 
       {/* Burger Menu Modal */}
@@ -1574,6 +1942,52 @@ export default function HomeScreen() {
                   <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
                 </TouchableOpacity>
 
+                <View style={[styles.menuLanguageSection, { borderBottomColor: colors.borderLight }]}>
+                  <Text style={[styles.menuSectionTitle, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>
+                    {t('settings.language')}
+                  </Text>
+                  <View style={[styles.menuLanguageButtons, getFlexDirection(isRTL, 'row')]}>
+                    <TouchableOpacity
+                      style={[
+                        styles.menuLanguageButton,
+                        {
+                          backgroundColor: language === 'en' ? colors.primary : colors.inputBackground,
+                          borderColor: language === 'en' ? colors.primary : colors.inputBorder,
+                        },
+                      ]}
+                      onPress={() => changeLanguage('en')}
+                    >
+                      <Text
+                        style={[
+                          styles.menuLanguageButtonText,
+                          { color: language === 'en' ? '#ffffff' : colors.text },
+                        ]}
+                      >
+                        EN
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.menuLanguageButton,
+                        {
+                          backgroundColor: language === 'ar' ? colors.primary : colors.inputBackground,
+                          borderColor: language === 'ar' ? colors.primary : colors.inputBorder,
+                        },
+                      ]}
+                      onPress={() => changeLanguage('ar')}
+                    >
+                      <Text
+                        style={[
+                          styles.menuLanguageButtonText,
+                          { color: language === 'ar' ? '#ffffff' : colors.text },
+                        ]}
+                      >
+                        AR
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
                 {isAdmin && (
                   <TouchableOpacity
                     style={[styles.menuItem, styles.menuItemLast, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
@@ -1655,6 +2069,57 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 10,
     fontWeight: 'bold',
+  },
+  searchFilterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  searchContainerFlex: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  filterEntryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    minHeight: 48,
+  },
+  filterEntryButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  filterEntryBadge: {
+    backgroundColor: '#ffffff',
+    borderRadius: 8,
+    minWidth: 18,
+    height: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 4,
+  },
+  filterEntryBadgeText: {
+    color: '#667eea',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  activeFiltersBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  activeFiltersBarText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  activeFiltersClearText: {
+    fontSize: 13,
+    fontWeight: '700',
   },
   searchContainer: {
     flexDirection: 'row',
@@ -1877,6 +2342,23 @@ const styles = StyleSheet.create({
   emptyText: {
     fontSize: 16,
     color: '#71717a',
+    textAlign: 'center',
+  },
+  emptySubtext: {
+    fontSize: 14,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  clearFiltersButton: {
+    marginTop: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 12,
+  },
+  clearFiltersButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
+    fontWeight: '600',
   },
   conditionBadge: {
     position: 'absolute',
@@ -2106,48 +2588,9 @@ const styles = StyleSheet.create({
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-  },
-  languageButtons: {
-    flexDirection: 'row',
-    gap: 6,
-    marginRight: 4,
-  },
-  languageButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-    minWidth: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  languageButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
   },
   menuButton: {
     padding: 4,
-  },
-  filterButton: {
-    padding: 4,
-    position: 'relative',
-  },
-  filterBadge: {
-    position: 'absolute',
-    top: -2,
-    right: -2,
-    backgroundColor: '#ef4444',
-    borderRadius: 8,
-    minWidth: 16,
-    height: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 3,
-  },
-  filterBadgeText: {
-    color: '#ffffff',
-    fontSize: 8,
-    fontWeight: 'bold',
   },
   // Menu Styles
   menuOverlay: {
@@ -2251,6 +2694,35 @@ const styles = StyleSheet.create({
     color: '#09090b',
     fontWeight: '500',
   },
+  menuLanguageSection: {
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+  },
+  menuSectionTitle: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  menuLanguageButtons: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  menuLanguageButton: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    minWidth: 64,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuLanguageButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
   menuDivider: {
     height: 1,
     backgroundColor: '#e2e8f0',
@@ -2280,13 +2752,13 @@ const styles = StyleSheet.create({
   },
   // Ads Styles
   adsSection: {
-    marginTop: 16,
+    marginTop: 8,
     marginBottom: 24,
     width: '100%',
   },
   adsBannerWrapper: {
     position: 'relative',
-    height: 220,
+    height: 180,
   },
   adsScrollView: {
     marginHorizontal: -16, // Match brands ScrollView - extend to screen edges (cancel parent padding)
@@ -2296,12 +2768,12 @@ const styles = StyleSheet.create({
   },
   adBanner: {
     width: SCREEN_WIDTH - 32, // Full width minus padding (16px on each side)
-    height: 220,
+    height: 180,
     marginRight: 0,
   },
   adsBannerContainer: {
     width: '100%',
-    height: 220,
+    height: 180,
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: '#ffffff',
@@ -2344,5 +2816,20 @@ const styles = StyleSheet.create({
   adImage: {
     width: '100%',
     height: '100%',
+  },
+  bannerDots: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 10,
+  },
+  bannerDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  bannerDotActive: {
+    width: 16,
   },
 });

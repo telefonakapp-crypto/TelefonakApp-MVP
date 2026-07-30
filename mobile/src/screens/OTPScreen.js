@@ -15,14 +15,23 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, CommonActions } from '@react-navigation/native';
 import apiClient, { API_BASE_URL } from '../utils/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useLanguage } from '../context/LanguageContext';
+
+const RESEND_COOLDOWN_SECONDS = 60;
 
 export default function OTPScreen() {
   const [otp, setOtp] = useState('');
   const [loading, setLoading] = useState(false);
-  const [timer, setTimer] = useState(30);
+  // Matches the server's resend cooldown, so the button unlocks exactly when a
+  // new code would be accepted.
+  const [timer, setTimer] = useState(RESEND_COOLDOWN_SECONDS);
   const navigation = useNavigation();
   const route = useRoute();
-  const { phoneNumber, isSignUp } = route.params || {};
+  const { t } = useLanguage();
+  // 'phone-change' reuses this screen for a logged-in user verifying a new
+  // number; without it the screen behaves exactly as it did for login/sign up.
+  const { phoneNumber, isSignUp, purpose } = route.params || {};
+  const isPhoneChange = purpose === 'phone-change';
 
   useEffect(() => {
     if (timer > 0) {
@@ -41,6 +50,22 @@ export default function OTPScreen() {
 
     setLoading(true);
     try {
+      if (isPhoneChange) {
+        // The server verifies against the pending change it stored, so the
+        // number is never sent from here.
+        const response = await apiClient.post('/profile/change-phone/verify', { otp });
+
+        if (response.data?.token) {
+          // The old token still carries the previous number.
+          await AsyncStorage.setItem('authToken', response.data.token);
+        }
+
+        Alert.alert(t('common.success'), t('changePhone.success'), [
+          { text: t('common.ok'), onPress: () => navigation.navigate('Profile') },
+        ]);
+        return;
+      }
+
       const response = await apiClient.post('/auth/verify-otp', {
         phone_number: phoneNumber,
         otp: otp,
@@ -84,19 +109,24 @@ export default function OTPScreen() {
 
     setLoading(true);
     try {
-      const response = await apiClient.post('/auth/request-otp', {
-        phone_number: phoneNumber,
-      });
+      const response = isPhoneChange
+        ? await apiClient.post('/profile/change-phone/request', { new_phone_number: phoneNumber })
+        : await apiClient.post('/auth/request-otp', { phone_number: phoneNumber });
 
       if (response.data) {
-        setTimer(30);
+        setTimer(RESEND_COOLDOWN_SECONDS);
         setOtp('');
         if (response.data.otp) {
           Alert.alert('OTP', `Your OTP is: ${response.data.otp} (Development mode)`);
         }
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to resend OTP. Please try again.');
+      // A refused resend tells us exactly how long the server wants us to wait.
+      const retryAfter = error.response?.data?.retry_after_seconds;
+      if (retryAfter) {
+        setTimer(retryAfter);
+      }
+      Alert.alert('Error', error.response?.data?.error || 'Failed to resend OTP. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -161,7 +191,7 @@ export default function OTPScreen() {
                 disabled={timer > 0 || loading}
               >
                 <Text style={[styles.resendButton, (timer > 0 || loading) && styles.resendButtonDisabled]}>
-                  {timer > 0 ? `Resend Code in ${timer}s` : 'Resend Code in 30s'}
+                  {timer > 0 ? `Resend Code in ${timer}s` : 'Resend Code'}
                 </Text>
               </TouchableOpacity>
             </View>

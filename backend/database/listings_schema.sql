@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS listings (
     price DECIMAL(10,2) NOT NULL CHECK (price > 0),
     description TEXT,
     location VARCHAR(100),
-    status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'sold', 'deleted')),
+    status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'declined', 'sold', 'deleted')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

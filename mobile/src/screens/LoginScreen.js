@@ -14,6 +14,7 @@ import { useNavigation } from '@react-navigation/native';
 import apiClient, { API_BASE_URL } from '../utils/api';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
+import { formatPhoneNumber, PHONE_NUMBER_LENGTH } from '../utils/phone';
 
 export default function LoginScreen() {
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -21,23 +22,8 @@ export default function LoginScreen() {
   const navigation = useNavigation();
   const { t, isRTL } = useLanguage();
 
-  const formatPhoneNumber = (text) => {
-    // Remove all non-digits
-    const cleaned = text.replace(/\D/g, '');
-    
-    // Format as Jordanian phone number (07XXXXXXXX)
-    if (cleaned.startsWith('0')) {
-      return cleaned.slice(0, 10);
-    } else if (cleaned.startsWith('962')) {
-      return '0' + cleaned.slice(3);
-    } else if (cleaned.startsWith('7')) {
-      return '0' + cleaned;
-    }
-    return cleaned;
-  };
-
   const handleRequestOTP = async () => {
-    if (!phoneNumber || phoneNumber.length !== 10) {
+    if (!phoneNumber || phoneNumber.length !== PHONE_NUMBER_LENGTH) {
       Alert.alert(t('common.error'), t('auth.invalidPhoneNumber'));
       return;
     }

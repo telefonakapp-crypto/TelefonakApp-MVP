@@ -30,7 +30,13 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Telefonak needs access to your photos so you can attach images to your listings."
+        }
+      ]
     ]
   }
 }

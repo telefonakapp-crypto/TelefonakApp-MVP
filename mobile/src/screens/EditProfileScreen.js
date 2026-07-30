@@ -18,7 +18,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useTheme } from '../context/ThemeContext';
 
-const API_BASE_URL = 'https://yun-nonerrant-joaquina.ngrok-free.dev/api';
+const API_BASE_URL = 'http://localhost:3000/api';
 
 export default function EditProfileScreen() {
   const navigation = useNavigation();

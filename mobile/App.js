@@ -6,8 +6,10 @@ import axios from 'axios';
 import { I18nManager } from 'react-native';
 import { ThemeProvider } from './src/context/ThemeContext';
 import { LanguageProvider, useLanguage } from './src/context/LanguageContext';
+import { FavoritesProvider } from './src/context/FavoritesContext';
+import { NotificationsProvider } from './src/context/NotificationsContext';
 
-const API_BASE_URL = 'https://yun-nonerrant-joaquina.ngrok-free.dev/api';
+const API_BASE_URL = 'http://localhost:3000/api';
 import SplashScreen from './src/screens/SplashScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import AuthChoiceScreen from './src/screens/AuthChoiceScreen';
@@ -18,6 +20,7 @@ import RegisterScreen from './src/screens/RegisterScreen';
 import HomeScreen from './src/screens/HomeScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import CreateListingScreen from './src/screens/CreateListingScreen';
+import EditListingScreen from './src/screens/EditListingScreen';
 import ListingDetailsScreen from './src/screens/ListingDetailsScreen';
 import MyListingsScreen from './src/screens/MyListingsScreen';
 import EditProfileScreen from './src/screens/EditProfileScreen';
@@ -29,6 +32,10 @@ import PrivacyPolicyScreen from './src/screens/PrivacyPolicyScreen';
 import TermsOfUseScreen from './src/screens/TermsOfUseScreen';
 import HelpScreen from './src/screens/HelpScreen';
 import AdminAdsScreen from './src/screens/AdminAdsScreen';
+import SavedListingsScreen from './src/screens/SavedListingsScreen';
+import MyOffersScreen from './src/screens/MyOffersScreen';
+import ReceivedOffersScreen from './src/screens/ReceivedOffersScreen';
+import ChangePhoneScreen from './src/screens/ChangePhoneScreen';
 
 const Stack = createStackNavigator();
 
@@ -102,7 +109,11 @@ export default function App() {
   return (
     <LanguageProvider>
       <ThemeProvider>
-        <AppNavigatorWrapper initialRoute={getInitialRoute()} />
+        <FavoritesProvider>
+          <NotificationsProvider>
+            <AppNavigatorWrapper initialRoute={getInitialRoute()} />
+          </NotificationsProvider>
+        </FavoritesProvider>
       </ThemeProvider>
     </LanguageProvider>
   );
@@ -148,6 +159,7 @@ function AppNavigatorWrapper({ initialRoute }) {
         />
         <Stack.Screen name="Profile" component={ProfileScreen} options={defaultScreenOptions} />
         <Stack.Screen name="CreateListing" component={CreateListingScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="EditListing" component={EditListingScreen} options={defaultScreenOptions} />
         <Stack.Screen name="ListingDetails" component={ListingDetailsScreen} options={defaultScreenOptions} />
         <Stack.Screen name="MyListings" component={MyListingsScreen} options={defaultScreenOptions} />
         <Stack.Screen name="EditProfile" component={EditProfileScreen} options={defaultScreenOptions} />
@@ -159,6 +171,10 @@ function AppNavigatorWrapper({ initialRoute }) {
         <Stack.Screen name="TermsOfUse" component={TermsOfUseScreen} options={defaultScreenOptions} />
         <Stack.Screen name="Help" component={HelpScreen} options={defaultScreenOptions} />
         <Stack.Screen name="AdminAds" component={AdminAdsScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="SavedListings" component={SavedListingsScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="MyOffers" component={MyOffersScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="ReceivedOffers" component={ReceivedOffersScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="ChangePhone" component={ChangePhoneScreen} options={defaultScreenOptions} />
       </Stack.Navigator>
     </NavigationContainer>
   );

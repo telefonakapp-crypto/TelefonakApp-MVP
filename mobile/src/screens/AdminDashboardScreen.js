@@ -18,14 +18,16 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
+import { useNotifications } from '../context/NotificationsContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 
-const API_BASE_URL = 'https://yun-nonerrant-joaquina.ngrok-free.dev/api';
+const API_BASE_URL = 'http://localhost:3000/api';
 
 export default function AdminDashboardScreen() {
   const navigation = useNavigation();
   const { colors, isDarkMode } = useTheme();
   const { t, isRTL } = useLanguage();
+  const { refreshUnreadCount } = useNotifications();
   const [listings, setListings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -33,7 +35,6 @@ export default function AdminDashboardScreen() {
   const [declineReason, setDeclineReason] = useState('');
   const [showDeclineModal, setShowDeclineModal] = useState(false);
   const [selectedListing, setSelectedListing] = useState(null);
-  const [unreadCount, setUnreadCount] = useState(0);
 
   const fetchListings = async () => {
     try {
@@ -67,32 +68,15 @@ export default function AdminDashboardScreen() {
     }
   };
 
-  const fetchUnreadCount = async () => {
-    try {
-      const token = await AsyncStorage.getItem('authToken');
-      if (!token) return;
-
-      const response = await axios.get(`${API_BASE_URL}/admin/notifications/unread-count`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      setUnreadCount(response.data.count || 0);
-    } catch (error) {
-      console.error('Error fetching unread count:', error);
-      setUnreadCount(0);
-    }
-  };
-
   useEffect(() => {
     fetchListings();
-    fetchUnreadCount();
+    refreshUnreadCount();
   }, [filter]);
 
   useFocusEffect(
     React.useCallback(() => {
       fetchListings();
-      fetchUnreadCount();
+      refreshUnreadCount();
     }, [filter])
   );
 
@@ -123,7 +107,7 @@ export default function AdminDashboardScreen() {
               );
               Alert.alert(t('common.success'), t('admin.listingApproved'));
               fetchListings();
-              fetchUnreadCount();
+              refreshUnreadCount();
             } catch (error) {
               console.error('Error approving listing:', error);
               Alert.alert(t('common.error'), t('admin.approveFailed'));
@@ -158,7 +142,7 @@ export default function AdminDashboardScreen() {
       setDeclineReason('');
       setSelectedListing(null);
       fetchListings();
-      fetchUnreadCount();
+      refreshUnreadCount();
     } catch (error) {
       console.error('Error declining listing:', error);
       Alert.alert(t('common.error'), t('admin.declineFailed'));

@@ -15,14 +15,18 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
+import { useFavorites } from '../context/FavoritesContext';
+import { useNotifications } from '../context/NotificationsContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 
-const API_BASE_URL = 'https://yun-nonerrant-joaquina.ngrok-free.dev/api';
+const API_BASE_URL = 'http://localhost:3000/api';
 
 export default function ProfileScreen() {
   const navigation = useNavigation();
   const { colors } = useTheme();
   const { t, isRTL } = useLanguage();
+  const { clearFavorites } = useFavorites();
+  const { clearUnreadCount } = useNotifications();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -70,6 +74,8 @@ export default function ProfileScreen() {
             try {
               await AsyncStorage.removeItem('authToken');
               await AsyncStorage.removeItem('hasSeenOnboarding');
+              clearFavorites();
+              clearUnreadCount();
               navigation.reset({
                 index: 0,
                 routes: [{ name: 'Login' }],
@@ -112,7 +118,43 @@ export default function ProfileScreen() {
           </View>
 
         <View style={[styles.menuSection, { backgroundColor: colors.surface }]}>
-          
+
+          <TouchableOpacity
+            style={[styles.menuItem, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
+            onPress={() => navigation.navigate('SavedListings')}
+          >
+            <Ionicons name="heart-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 16, marginLeft: isRTL ? 16 : 0 }} />
+            <Text style={[styles.menuItemText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('profile.savedListings')}</Text>
+            <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.menuItem, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
+            onPress={() => navigation.navigate('MyOffers')}
+          >
+            <Ionicons name="pricetag-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 16, marginLeft: isRTL ? 16 : 0 }} />
+            <Text style={[styles.menuItemText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('offers.myOffers')}</Text>
+            <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.menuItem, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
+            onPress={() => navigation.navigate('ReceivedOffers')}
+          >
+            <Ionicons name="pricetags-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 16, marginLeft: isRTL ? 16 : 0 }} />
+            <Text style={[styles.menuItemText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('offers.receivedOffers')}</Text>
+            <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.menuItem, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
+            onPress={() => navigation.navigate('ChangePhone')}
+          >
+            <Ionicons name="call-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 16, marginLeft: isRTL ? 16 : 0 }} />
+            <Text style={[styles.menuItemText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('profile.changePhoneNumber')}</Text>
+            <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
+          </TouchableOpacity>
+
           <TouchableOpacity 
             style={[styles.menuItem, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
             onPress={() => navigation.navigate('Settings')}

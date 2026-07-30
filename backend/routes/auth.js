@@ -4,28 +4,7 @@ const pool = require('../config/database');
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-
-// Generate OTP - Using hardcoded OTP for testing
-function generateOTP() {
-  // TODO: Replace with actual OTP service when ready
-  return '1234'; // Hardcoded for testing (4 digits)
-}
-
-// Send OTP (mock implementation - replace with Twilio in production)
-async function sendOTP(phoneNumber, code) {
-  // TEST MODE: Using hardcoded OTP (1234)
-  // In production, use Twilio to send SMS
-  console.log(`[TEST MODE] OTP for ${phoneNumber}: ${code}`);
-  // TODO: Uncomment and configure Twilio when ready
-  // const twilio = require('twilio');
-  // const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-  // await client.messages.create({
-  //   body: `Your Telefonak verification code is: ${code}`,
-  //   from: process.env.TWILIO_PHONE_NUMBER,
-  //   to: phoneNumber
-  // });
-  return true;
-}
+const { OTP_PURPOSE, issueOtp, consumeOtp, otpValidator, sendOtpError } = require('../utils/otp');
 
 // Request OTP
 router.post('/request-otp', 
@@ -40,25 +19,20 @@ router.post('/request-otp',
       }
 
       const { phone_number } = req.body;
-      const otp = generateOTP();
-      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+      // Cooldown and hourly request limits are enforced by the shared service.
+      const issued = await issueOtp(pool, {
+        phoneNumber: phone_number,
+        purpose: OTP_PURPOSE.AUTH,
+      });
 
-      // Delete old OTPs for this phone number
-      await pool.query('DELETE FROM otp_codes WHERE phone_number = $1', [phone_number]);
-
-      // Insert new OTP
-      await pool.query(
-        'INSERT INTO otp_codes (phone_number, code, expires_at) VALUES ($1, $2, $3)',
-        [phone_number, otp, expiresAt]
-      );
-
-      // Send OTP
-      await sendOTP(phone_number, otp);
+      if (!issued.ok) {
+        return sendOtpError(res, issued);
+      }
 
       res.json({ 
         message: 'OTP sent successfully',
         // Always return OTP in test mode (hardcoded to 1234)
-        otp: otp
+        otp: issued.code
       });
     } catch (error) {
       console.error('Error requesting OTP:', error);
@@ -71,7 +45,7 @@ router.post('/request-otp',
 router.post('/verify-otp',
   [
     body('phone_number').isMobilePhone('ar-JO').withMessage('Invalid Jordanian phone number'),
-    body('otp').isLength({ min: 4, max: 4 }).withMessage('OTP must be 4 digits')
+    otpValidator('otp')
   ],
   async (req, res) => {
     try {
@@ -82,20 +56,15 @@ router.post('/verify-otp',
 
       const { phone_number, otp } = req.body;
 
-      // Find valid OTP
-      const result = await pool.query(
-        `SELECT * FROM otp_codes 
-         WHERE phone_number = $1 AND code = $2 AND expires_at > NOW() AND is_used = FALSE
-         ORDER BY created_at DESC LIMIT 1`,
-        [phone_number, otp]
-      );
+      const consumed = await consumeOtp(pool, {
+        phoneNumber: phone_number,
+        code: otp,
+        purpose: OTP_PURPOSE.AUTH,
+      });
 
-      if (result.rows.length === 0) {
-        return res.status(400).json({ error: 'Invalid or expired OTP' });
+      if (!consumed.ok) {
+        return sendOtpError(res, consumed);
       }
-
-      // Mark OTP as used
-      await pool.query('UPDATE otp_codes SET is_used = TRUE WHERE id = $1', [result.rows[0].id]);
 
       // Check if user already exists
       const userResult = await pool.query('SELECT * FROM users WHERE phone_number = $1', [phone_number]);

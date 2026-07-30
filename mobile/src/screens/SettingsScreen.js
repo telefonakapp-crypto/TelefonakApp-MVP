@@ -14,12 +14,16 @@ import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
+import { useFavorites } from '../context/FavoritesContext';
+import { useNotifications } from '../context/NotificationsContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 
 export default function SettingsScreen() {
   const navigation = useNavigation();
   const { colors, isDarkMode, toggleTheme } = useTheme();
   const { language, changeLanguage, t, isRTL } = useLanguage();
+  const { clearFavorites } = useFavorites();
+  const { clearUnreadCount } = useNotifications();
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(true);
 
   React.useEffect(() => {
@@ -63,6 +67,8 @@ export default function SettingsScreen() {
             try {
               await AsyncStorage.removeItem('authToken');
               await AsyncStorage.removeItem('hasSeenOnboarding');
+              clearFavorites();
+              clearUnreadCount();
               navigation.reset({
                 index: 0,
                 routes: [{ name: 'Login' }],

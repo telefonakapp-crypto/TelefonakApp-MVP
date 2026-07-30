@@ -23,12 +23,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
+import { useModelOptions } from '../hooks/useModelOptions';
+import { filterMvpCategories, localizedCategoryName } from '../utils/mvpCategories';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ITEM_HEIGHT = 50;
 const VISIBLE_ITEMS = 5;
 
-const API_BASE_URL = 'https://yun-nonerrant-joaquina.ngrok-free.dev/api';
+const API_BASE_URL = 'http://localhost:3000/api';
 
 export default function CreateListingScreen() {
   const navigation = useNavigation();
@@ -39,13 +41,16 @@ export default function CreateListingScreen() {
   const [images, setImages] = useState([]);
   const [formData, setFormData] = useState({
     model_id: '',
-    storage_id: '',
-    color_id: '',
+    model_storage_id: '',
+    model_color_id: '',
+    sim_configuration_id: '',
     condition_id: '',
     battery_percentage: null,
     price: '',
     description: '',
     location: '',
+    city_id: '',
+    area_id: '',
   });
 
   // Generate battery percentage options from 100% to 70%
@@ -69,9 +74,14 @@ export default function CreateListingScreen() {
 
   const [brands, setBrands] = useState([]);
   const [models, setModels] = useState([]);
-  const [storage, setStorage] = useState([]);
-  const [colorsList, setColorsList] = useState([]);
+  // Model-specific storages/colors — loaded from the catalog API via shared hook
+  const { modelStorages, modelColors, loadingModelOptions } = useModelOptions(formData.model_id);
+  const [categories, setCategories] = useState([]);
+  const [selectedCategoryId, setSelectedCategoryId] = useState(null);
   const [conditions, setConditions] = useState([]);
+  const [simConfigurations, setSimConfigurations] = useState([]);
+  const [cities, setCities] = useState([]);
+  const [areas, setAreas] = useState([]);
   const [selectedBrandId, setSelectedBrandId] = useState(null);
   const [modelSearchQuery, setModelSearchQuery] = useState('');
 
@@ -80,13 +90,22 @@ export default function CreateListingScreen() {
   }, []);
 
   useEffect(() => {
-    if (selectedBrandId) {
+    if (selectedBrandId && selectedCategoryId) {
       fetchModels(selectedBrandId);
     } else {
       setModels([]);
-      setFormData(prev => ({ ...prev, model_id: '' }));
+      if (!selectedBrandId) {
+        setFormData(prev => ({ ...prev, model_id: '' }));
+      }
     }
-  }, [selectedBrandId]);
+  }, [selectedBrandId, selectedCategoryId]);
+
+  // When the model changes, reset storage and color selections.
+  // The hook (useModelOptions) handles the actual data fetch.
+  useEffect(() => {
+    setFormData(prev => ({ ...prev, model_storage_id: '', model_color_id: '' }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.model_id]);
 
   // Check if battery percentage should be shown (only if condition is not "New")
   const selectedCondition = conditions.find(c => c.id === formData.condition_id);
@@ -214,17 +233,24 @@ export default function CreateListingScreen() {
 
   const fetchData = async () => {
     try {
-      const [brandsRes, storageRes, colorsRes, conditionsRes] = await Promise.all([
-        axios.get(`${API_BASE_URL}/brands`),
-        axios.get(`${API_BASE_URL}/storage`),
-        axios.get(`${API_BASE_URL}/colors`),
+      const [categoriesRes, conditionsRes, simRes, citiesRes] = await Promise.all([
+        axios.get(`${API_BASE_URL}/categories`),
         axios.get(`${API_BASE_URL}/conditions`),
+        axios.get(`${API_BASE_URL}/sim-configurations`),
+        axios.get(`${API_BASE_URL}/cities`),
       ]);
 
-      setBrands(brandsRes.data.brands);
-      setStorage(storageRes.data.storage);
-      setColorsList(colorsRes.data.colors);
       setConditions(conditionsRes.data.conditions);
+      setSimConfigurations(simRes.data.sim_configurations || []);
+      setCities(citiesRes.data.cities || []);
+
+      const cats = filterMvpCategories(categoriesRes.data.categories || []);
+      setCategories(cats);
+      const phonesCat = cats.find(c => c.slug === 'phones') || cats[0];
+      if (phonesCat) {
+        setSelectedCategoryId(phonesCat.id);
+        await fetchBrandsForCategory(phonesCat.id);
+      }
     } catch (error) {
       console.error('Error fetching data:', error);
       Alert.alert('Error', 'Failed to load form data');
@@ -233,9 +259,74 @@ export default function CreateListingScreen() {
     }
   };
 
+  const fetchBrandsForCategory = async (categoryId) => {
+    try {
+      const url = categoryId
+        ? `${API_BASE_URL}/brands?category_id=${categoryId}`
+        : `${API_BASE_URL}/brands`;
+      const brandsRes = await axios.get(url);
+      setBrands(brandsRes.data.brands || []);
+    } catch (error) {
+      console.error('Error fetching brands:', error);
+      setBrands([]);
+    }
+  };
+
+  const handleSelectCategory = async (categoryId) => {
+    if (categoryId === selectedCategoryId) return;
+    setSelectedCategoryId(categoryId);
+    setSelectedBrandId(null);
+    setModels([]);
+    setModelSearchQuery('');
+    setFormData(prev => ({
+      ...prev,
+      model_id: '',
+      model_storage_id: '',
+      model_color_id: '',
+    }));
+    await fetchBrandsForCategory(categoryId);
+  };
+
+  const handleSelectCity = async (cityId) => {
+    setFormData(prev => ({ ...prev, city_id: cityId, area_id: '', location: '' }));
+    setAreas([]);
+    if (!cityId) return;
+    try {
+      const res = await axios.get(`${API_BASE_URL}/cities/${cityId}/areas`);
+      setAreas(res.data.areas || []);
+      const city = cities.find(c => c.id === cityId);
+      if (city) {
+        setFormData(prev => ({
+          ...prev,
+          city_id: cityId,
+          location: language === 'ar' && city.name_ar ? city.name_ar : city.name_en,
+        }));
+      }
+    } catch (error) {
+      console.error('Error fetching areas:', error);
+    }
+  };
+
+  const handleSelectArea = (areaId) => {
+    const area = areas.find(a => a.id === areaId);
+    const city = cities.find(c => c.id === formData.city_id);
+    const areaName = area
+      ? (language === 'ar' && area.name_ar ? area.name_ar : area.name_en)
+      : '';
+    const cityName = city
+      ? (language === 'ar' && city.name_ar ? city.name_ar : city.name_en)
+      : '';
+    setFormData(prev => ({
+      ...prev,
+      area_id: areaId,
+      location: areaName && cityName ? `${areaName}, ${cityName}` : (cityName || prev.location),
+    }));
+  };
+
   const fetchModels = async (brandId) => {
     try {
-      const modelsRes = await axios.get(`${API_BASE_URL}/brands/${brandId}/models`);
+      const params = selectedCategoryId ? `?category_id=${selectedCategoryId}` : '';
+      const modelsRes = await axios.get(`${API_BASE_URL}/brands/${brandId}/models${params}`);
       setModels(modelsRes.data.models);
     } catch (error) {
       console.error('Error fetching models:', error);
@@ -247,8 +338,8 @@ export default function CreateListingScreen() {
 
   const handleBrandSelect = (brandId) => {
     setSelectedBrandId(brandId);
-    setFormData(prev => ({ ...prev, model_id: '' })); // Clear model selection when brand changes
-    setModelSearchQuery(''); // Clear search
+    setFormData(prev => ({ ...prev, model_id: '', model_storage_id: '', model_color_id: '' }));
+    setModelSearchQuery('');
   };
 
   const filteredModels = models.filter(model =>
@@ -307,6 +398,11 @@ export default function CreateListingScreen() {
 
   const handleSubmit = async () => {
     // Validate all required fields and focus on the first missing one
+    if (!selectedCategoryId) {
+      Alert.alert('Error', t('createListing.pleaseSelectCategory') || 'Please select a category');
+      return;
+    }
+
     if (!selectedBrandId) {
       Alert.alert('Error', 'Please select a brand');
       scrollToField('brand');
@@ -319,15 +415,21 @@ export default function CreateListingScreen() {
       return;
     }
     
-    if (!formData.storage_id) {
+    if (!formData.model_storage_id) {
       Alert.alert('Error', 'Please select storage');
       scrollToField('storage');
       return;
     }
     
-    if (!formData.color_id) {
+    if (!formData.model_color_id) {
       Alert.alert('Error', 'Please select a color');
       scrollToField('color');
+      return;
+    }
+
+    if (!formData.sim_configuration_id) {
+      Alert.alert('Error', 'Please select a SIM configuration');
+      scrollToField('sim');
       return;
     }
     
@@ -352,38 +454,68 @@ export default function CreateListingScreen() {
       return;
     }
     
-    if (!formData.location || formData.location.trim() === '') {
-      Alert.alert('Error', 'Please enter a location');
+    if (!formData.city_id) {
+      Alert.alert('Error', 'Please select a city');
       scrollToField('location');
-      setTimeout(() => {
-        locationInputRef.current?.focus();
-      }, 300);
+      return;
+    }
+
+    if (!images || images.length === 0) {
+      Alert.alert('Error', 'Please add at least one image');
+      scrollToField('images');
       return;
     }
 
     setLoading(true);
     try {
       const token = await AsyncStorage.getItem('authToken');
-      
-      // Convert images to base64 (for now - in production, upload to cloud storage)
-      const imageUrls = [];
-      for (const imageUri of images) {
-        // For now, we'll send the local URI. In production, upload to cloud storage first
-        // and send the cloud URL
-        imageUrls.push(imageUri);
+
+      // Upload selected images first (multipart/form-data), then attach the
+      // returned public URLs to the listing.
+      let imageUrls = [];
+      if (images.length > 0) {
+        const uploadFormData = new FormData();
+        images.forEach((uri, index) => {
+          const fileName = uri.split('/').pop() || `photo_${index}.jpg`;
+          const extMatch = /\.(\w+)$/.exec(fileName);
+          const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
+          const mimeType =
+            ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
+          uploadFormData.append('images', {
+            uri,
+            name: fileName,
+            type: mimeType,
+          });
+        });
+
+        const uploadResponse = await axios.post(
+          `${API_BASE_URL}/upload/listing-images`,
+          uploadFormData,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Content-Type': 'multipart/form-data',
+            },
+          }
+        );
+        imageUrls = uploadResponse.data.image_urls || [];
       }
 
       const response = await axios.post(
         `${API_BASE_URL}/listings`,
         {
-          ...formData,
-          price: parseFloat(formData.price),
-          images: imageUrls,
-          // Send both descriptions
-          // Send description based on current language
-          description_en: language === 'en' ? formData.description || null : null,
-          description_ar: language === 'ar' ? formData.description || null : null,
-          description_ar_is_auto_translated: false,
+          model_id:         formData.model_id,
+          model_storage_id: formData.model_storage_id,
+          model_color_id:   formData.model_color_id,
+          sim_configuration_id: formData.sim_configuration_id,
+          condition_id:     formData.condition_id,
+          battery_percentage: formData.battery_percentage,
+          price:            parseFloat(formData.price),
+          description:      formData.description || null,
+          location:         formData.location || null,
+          city_id:          formData.city_id || null,
+          area_id:          formData.area_id || null,
+          images:           imageUrls,
         },
         {
           headers: {
@@ -435,6 +567,38 @@ export default function CreateListingScreen() {
         contentContainerStyle={styles.contentContainer}
       >
         <View style={styles.form}>
+          <View style={styles.inputGroup}>
+            <Text style={[styles.label, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+              {t('createListing.category') || t('home.category')} <Text style={styles.requiredAsterisk}>*</Text>
+            </Text>
+            <View style={[styles.pickerContainer, getFlexDirection(isRTL, 'row')]}>
+              {categories.map((cat) => (
+                <TouchableOpacity
+                  key={cat.id}
+                  style={[
+                    styles.pickerOption,
+                    {
+                      backgroundColor: selectedCategoryId === cat.id ? colors.primary : colors.surface,
+                      borderColor: selectedCategoryId === cat.id ? colors.primary : colors.inputBorder,
+                    },
+                    selectedCategoryId === cat.id && styles.pickerOptionActive,
+                  ]}
+                  onPress={() => handleSelectCategory(cat.id)}
+                >
+                  <Text
+                    style={[
+                      styles.pickerOptionText,
+                      { color: selectedCategoryId === cat.id ? '#ffffff' : colors.text },
+                      getTextAlign(isRTL, 'center'),
+                    ]}
+                  >
+                    {localizedCategoryName(cat, language)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
           <View 
             style={styles.inputGroup} 
             ref={brandFieldRef}
@@ -560,28 +724,40 @@ export default function CreateListingScreen() {
             <Text style={[styles.label, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
               {t('createListing.storage')} <Text style={styles.requiredAsterisk}>*</Text>
             </Text>
-            <View style={[styles.pickerContainer, getFlexDirection(isRTL, 'row')]}>
-              {storage.map((item) => (
-                <TouchableOpacity
-                  key={item.id}
-                  style={[
-                    styles.pickerOption,
-                    { backgroundColor: formData.storage_id === item.id ? colors.primary : colors.surface, borderColor: formData.storage_id === item.id ? colors.primary : colors.inputBorder },
-                  ]}
-                  onPress={() => setFormData({ ...formData, storage_id: item.id })}
-                >
-                  <Text
+            {!formData.model_id ? (
+              <View style={[styles.emptyState, { backgroundColor: colors.inputBackground }]}>
+                <Text style={[styles.emptyStateText, { color: colors.textSecondary }]}>Select a model first</Text>
+              </View>
+            ) : loadingModelOptions ? (
+              <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 8 }} />
+            ) : modelStorages.length === 0 ? (
+              <View style={[styles.emptyState, { backgroundColor: colors.inputBackground }]}>
+                <Text style={[styles.emptyStateText, { color: colors.textSecondary }]}>No storage options available</Text>
+              </View>
+            ) : (
+              <View style={[styles.pickerContainer, getFlexDirection(isRTL, 'row')]}>
+                {modelStorages.map((item) => (
+                  <TouchableOpacity
+                    key={item.id}
                     style={[
-                      styles.pickerOptionText,
-                      { color: formData.storage_id === item.id ? '#ffffff' : colors.text },
-                      getTextAlign(isRTL, 'center'),
+                      styles.pickerOption,
+                      { backgroundColor: formData.model_storage_id === item.id ? colors.primary : colors.surface, borderColor: formData.model_storage_id === item.id ? colors.primary : colors.inputBorder },
                     ]}
+                    onPress={() => setFormData({ ...formData, model_storage_id: item.id })}
                   >
-                    {item.capacity_gb} GB
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
+                    <Text
+                      style={[
+                        styles.pickerOptionText,
+                        { color: formData.model_storage_id === item.id ? '#ffffff' : colors.text },
+                        getTextAlign(isRTL, 'center'),
+                      ]}
+                    >
+                      {item.label || `${item.capacity_gb} GB`}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
           </View>
 
           <View 
@@ -821,43 +997,90 @@ export default function CreateListingScreen() {
             <Text style={[styles.label, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
               {t('createListing.color')} <Text style={styles.requiredAsterisk}>*</Text>
             </Text>
+            {!formData.model_id ? (
+              <View style={[styles.emptyState, { backgroundColor: colors.inputBackground }]}>
+                <Text style={[styles.emptyStateText, { color: colors.textSecondary }]}>Select a model first</Text>
+              </View>
+            ) : loadingModelOptions ? (
+              <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: 8 }} />
+            ) : modelColors.length === 0 ? (
+              <View style={[styles.emptyState, { backgroundColor: colors.inputBackground }]}>
+                <Text style={[styles.emptyStateText, { color: colors.textSecondary }]}>No color options available</Text>
+              </View>
+            ) : (
+              <View style={[styles.pickerContainer, getFlexDirection(isRTL, 'row')]}>
+                {modelColors.map((color) => (
+                  <TouchableOpacity
+                    key={color.id}
+                    style={[
+                      styles.pickerOption,
+                      { 
+                        backgroundColor: formData.model_color_id === color.id ? colors.primary : colors.surface,
+                        borderColor: formData.model_color_id === color.id ? colors.primary : colors.inputBorder 
+                      },
+                      formData.model_color_id === color.id && styles.pickerOptionActive,
+                    ]}
+                    onPress={() => setFormData({ ...formData, model_color_id: color.id })}
+                  >
+                    <View style={[styles.colorOption, getFlexDirection(isRTL, 'row')]}>
+                      <View
+                        style={[
+                          styles.colorCircle,
+                          { backgroundColor: color.hex_code || '#cccccc' },
+                          { marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }
+                        ]}
+                      />
+                      <Text
+                        style={[
+                          styles.pickerOptionText,
+                          { color: formData.model_color_id === color.id ? '#ffffff' : colors.text },
+                          getTextAlign(isRTL, 'auto'),
+                        ]}
+                      >
+                        {color.display_name || color.name}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+
+
+          <View
+            style={styles.inputGroup}
+            onLayout={(e) => handleFieldLayout('sim', e)}
+          >
+            <Text style={[styles.label, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+              {t('createListing.simConfiguration')} <Text style={styles.requiredAsterisk}>*</Text>
+            </Text>
             <View style={[styles.pickerContainer, getFlexDirection(isRTL, 'row')]}>
-              {colorsList.map((color) => (
+              {simConfigurations.map((sim) => (
                 <TouchableOpacity
-                  key={color.id}
+                  key={sim.id}
                   style={[
                     styles.pickerOption,
-                    { 
-                      backgroundColor: formData.color_id === color.id ? colors.primary : colors.surface,
-                      borderColor: formData.color_id === color.id ? colors.primary : colors.inputBorder 
+                    {
+                      backgroundColor: formData.sim_configuration_id === sim.id ? colors.primary : colors.surface,
+                      borderColor: formData.sim_configuration_id === sim.id ? colors.primary : colors.inputBorder,
                     },
-                    formData.color_id === color.id && styles.pickerOptionActive,
+                    formData.sim_configuration_id === sim.id && styles.pickerOptionActive,
                   ]}
-                  onPress={() => setFormData({ ...formData, color_id: color.id })}
+                  onPress={() => setFormData({ ...formData, sim_configuration_id: sim.id })}
                 >
-                  <View style={[styles.colorOption, getFlexDirection(isRTL, 'row')]}>
-                    <View
-                      style={[
-                        styles.colorCircle,
-                        { backgroundColor: color.hex_code || '#cccccc' },
-                        { marginRight: isRTL ? 0 : 8, marginLeft: isRTL ? 8 : 0 }
-                      ]}
-                    />
-                    <Text
-                      style={[
-                        styles.pickerOptionText,
-                        { color: formData.color_id === color.id ? '#ffffff' : colors.text },
-                        getTextAlign(isRTL, 'auto'),
-                      ]}
-                    >
-                      {color.name}
-                    </Text>
-                  </View>
+                  <Text
+                    style={[
+                      styles.pickerOptionText,
+                      { color: formData.sim_configuration_id === sim.id ? '#ffffff' : colors.text },
+                      getTextAlign(isRTL, 'center'),
+                    ]}
+                  >
+                    {sim.name}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </View>
           </View>
-
 
           <View 
             style={styles.inputGroup}
@@ -898,18 +1121,81 @@ export default function CreateListingScreen() {
             <Text style={[styles.label, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
               {t('createListing.location')} <Text style={styles.requiredAsterisk}>*</Text>
             </Text>
-            <TextInput
-              ref={locationInputRef}
-              style={[styles.input, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder, color: colors.text }]}
-              placeholder={t('createListing.cityJordan')}
-              placeholderTextColor={colors.textSecondary}
-              value={formData.location}
-              onChangeText={(text) => setFormData({ ...formData, location: text })}
-            />
+            <Text style={[styles.label, { color: colors.textSecondary, fontSize: 14, marginBottom: 8 }, getTextAlign(isRTL, 'auto')]}>
+              {t('home.city') || 'City'}
+            </Text>
+            <View style={[styles.pickerContainer, getFlexDirection(isRTL, 'row')]}>
+              {cities.map((city) => (
+                <TouchableOpacity
+                  key={city.id}
+                  style={[
+                    styles.pickerOption,
+                    {
+                      backgroundColor: formData.city_id === city.id ? colors.primary : colors.surface,
+                      borderColor: formData.city_id === city.id ? colors.primary : colors.inputBorder,
+                    },
+                  ]}
+                  onPress={() => handleSelectCity(city.id)}
+                >
+                  <Text
+                    style={[
+                      styles.pickerOptionText,
+                      { color: formData.city_id === city.id ? '#ffffff' : colors.text },
+                      getTextAlign(isRTL, 'center'),
+                    ]}
+                  >
+                    {language === 'ar' && city.name_ar ? city.name_ar : city.name_en}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            {formData.city_id ? (
+              <>
+                <Text style={[styles.label, { color: colors.textSecondary, fontSize: 14, marginTop: 12, marginBottom: 8 }, getTextAlign(isRTL, 'auto')]}>
+                  {t('home.area') || 'Area'}
+                </Text>
+                {areas.length === 0 ? (
+                  <Text style={[styles.emptyStateText, { color: colors.textSecondary }]}>
+                    {language === 'ar' ? 'لا توجد مناطق لهذه المدينة' : 'No areas listed for this city'}
+                  </Text>
+                ) : (
+                  <View style={[styles.pickerContainer, getFlexDirection(isRTL, 'row')]}>
+                    {areas.map((area) => (
+                      <TouchableOpacity
+                        key={area.id}
+                        style={[
+                          styles.pickerOption,
+                          {
+                            backgroundColor: formData.area_id === area.id ? colors.primary : colors.surface,
+                            borderColor: formData.area_id === area.id ? colors.primary : colors.inputBorder,
+                          },
+                        ]}
+                        onPress={() => handleSelectArea(area.id)}
+                      >
+                        <Text
+                          style={[
+                            styles.pickerOptionText,
+                            { color: formData.area_id === area.id ? '#ffffff' : colors.text },
+                            getTextAlign(isRTL, 'center'),
+                          ]}
+                        >
+                          {language === 'ar' && area.name_ar ? area.name_ar : area.name_en}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </>
+            ) : null}
           </View>
 
-          <View style={styles.inputGroup}>
-            <Text style={[styles.label, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('createListing.images')}</Text>
+          <View
+            style={styles.inputGroup}
+            onLayout={(e) => handleFieldLayout('images', e)}
+          >
+            <Text style={[styles.label, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+              {t('createListing.images')} <Text style={styles.requiredAsterisk}>*</Text>
+            </Text>
             <Text style={[styles.imageHint, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>{t('createListing.addUpTo10Images')}</Text>
             <ScrollView 
               horizontal 
