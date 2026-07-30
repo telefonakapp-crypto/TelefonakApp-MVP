@@ -98,7 +98,7 @@ export default function AdminAdsScreen() {
       // Use the exact pixel dimensions as aspect ratio
       // This ensures the cropper enforces the exact proportions for 220px height
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         aspect: [displayWidth, displayHeight], // Direct ratio matching 220px height exactly
         quality: 1.0, // Maximum quality

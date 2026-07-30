@@ -36,7 +36,8 @@
         {
           "photosPermission": "Telefonak needs access to your photos so you can attach images to your listings."
         }
-      ]
+      ],
+      "@react-native-community/datetimepicker"
     ]
   }
 }

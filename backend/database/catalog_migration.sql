@@ -20,6 +20,13 @@ SELECT
 FROM storage_options so
 ON CONFLICT (capacity_gb) DO NOTHING;
 
+-- Also sync the reverse direction: catalog capacities (16 GB, 32 GB, …) must
+-- exist in legacy storage_options so create/edit listing inserts succeed.
+INSERT INTO storage_options (capacity_gb)
+SELECT DISTINCT sc.capacity_gb
+FROM storage_capacities sc
+ON CONFLICT (capacity_gb) DO NOTHING;
+
 -- Step 2: For every unique (model_id, storage_gb) combination that
 -- appears in existing listings, ensure a model_storages row exists.
 -- This handles models not yet in the official catalog.

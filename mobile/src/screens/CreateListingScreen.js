@@ -361,7 +361,7 @@ export default function CreateListingScreen() {
 
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsMultipleSelection: true,
         quality: 0.8,
         allowsEditing: false,
@@ -532,10 +532,11 @@ export default function CreateListingScreen() {
       ]);
     } catch (error) {
       console.error('Error creating listing:', error);
-      Alert.alert(
-        'Error',
-        error.response?.data?.error || 'Failed to create listing'
-      );
+      const apiError =
+        error.response?.data?.error ||
+        error.response?.data?.errors?.[0]?.msg ||
+        null;
+      Alert.alert('Error', apiError || 'Failed to create listing');
     } finally {
       setLoading(false);
     }

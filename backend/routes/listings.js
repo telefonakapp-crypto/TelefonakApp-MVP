@@ -26,6 +26,41 @@ const {
 
 const MAX_LISTING_IMAGES = 10;
 
+/**
+ * Resolve a catalog model_storage_id to the legacy listings.storage_id FK.
+ * Catalog capacities (e.g. 16 / 32 GB) may not yet exist in storage_options;
+ * create the missing row so create/edit do not reject valid catalog choices.
+ */
+async function resolveLegacyStorageId(modelStorageId) {
+  const msResult = await pool.query(
+    `SELECT ms.id, ms.model_id, sc.capacity_gb, so.id AS storage_id
+     FROM   model_storages ms
+     JOIN   storage_capacities sc ON sc.id = ms.storage_capacity_id
+     LEFT JOIN storage_options so ON so.capacity_gb = sc.capacity_gb
+     WHERE  ms.id = $1`,
+    [modelStorageId]
+  );
+
+  if (msResult.rows.length === 0) {
+    return { error: 'Invalid storage option' };
+  }
+
+  const row = msResult.rows[0];
+  if (row.storage_id) {
+    return { model_id: row.model_id, storage_id: row.storage_id };
+  }
+
+  const inserted = await pool.query(
+    `INSERT INTO storage_options (capacity_gb)
+     VALUES ($1)
+     ON CONFLICT (capacity_gb) DO UPDATE SET capacity_gb = EXCLUDED.capacity_gb
+     RETURNING id`,
+    [row.capacity_gb]
+  );
+
+  return { model_id: row.model_id, storage_id: inserted.rows[0].id };
+}
+
 // The view counter is seller-only data, so it is stripped from any payload
 // that can reach someone other than the listing owner.
 const withoutViewCount = ({ views, ...listing }) => listing;
@@ -258,22 +293,14 @@ router.post('/listings', verifyToken,
       }
 
       // Validate model_storage_id belongs to model_id and fetch derived storage_id
-      const msResult = await pool.query(
-        `SELECT ms.id, ms.model_id, sc.capacity_gb,
-                so.id AS storage_id
-         FROM   model_storages ms
-         JOIN   storage_capacities sc ON sc.id = ms.storage_capacity_id
-         JOIN   storage_options    so ON so.capacity_gb = sc.capacity_gb
-         WHERE  ms.id = $1`,
-        [model_storage_id]
-      );
-      if (msResult.rows.length === 0) {
-        return res.status(400).json({ error: 'Invalid storage option' });
+      const storageResolved = await resolveLegacyStorageId(model_storage_id);
+      if (storageResolved.error) {
+        return res.status(400).json({ error: storageResolved.error });
       }
-      if (msResult.rows[0].model_id !== parseInt(model_id)) {
+      if (storageResolved.model_id !== parseInt(model_id, 10)) {
         return res.status(400).json({ error: 'Storage option does not belong to this model' });
       }
-      const storage_id = msResult.rows[0].storage_id;
+      const storage_id = storageResolved.storage_id;
 
       // Validate model_color_id belongs to model_id and fetch derived color_id
       const mcResult = await pool.query(
@@ -980,21 +1007,14 @@ router.put('/listings/:id', verifyToken,
       }
 
       // Validate model_storage_id and derive legacy storage_id
-      const msResult = await pool.query(
-        `SELECT ms.id, ms.model_id, sc.capacity_gb, so.id AS storage_id
-         FROM   model_storages ms
-         JOIN   storage_capacities sc ON sc.id = ms.storage_capacity_id
-         JOIN   storage_options    so ON so.capacity_gb = sc.capacity_gb
-         WHERE  ms.id = $1`,
-        [model_storage_id]
-      );
-      if (msResult.rows.length === 0) {
-        return res.status(400).json({ error: 'Invalid storage option' });
+      const storageResolved = await resolveLegacyStorageId(model_storage_id);
+      if (storageResolved.error) {
+        return res.status(400).json({ error: storageResolved.error });
       }
-      if (msResult.rows[0].model_id !== parseInt(model_id)) {
+      if (storageResolved.model_id !== parseInt(model_id, 10)) {
         return res.status(400).json({ error: 'Storage option does not belong to this model' });
       }
-      const storage_id = msResult.rows[0].storage_id;
+      const storage_id = storageResolved.storage_id;
 
       // Validate model_color_id and derive legacy color_id
       const mcResult = await pool.query(

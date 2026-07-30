@@ -171,12 +171,17 @@ export default function EditListingScreen() {
 
   const fetchData = async () => {
     try {
+      // Pending/hidden/declined listings are owner-only. Without the token the
+      // API returns 404 for those statuses, which breaks Edit Listing.
+      const token = await AsyncStorage.getItem('authToken');
+      const authHeaders = token ? { Authorization: `Bearer ${token}` } : {};
+
       const [categoriesRes, conditionsRes, simRes, citiesRes, listingRes] = await Promise.all([
         axios.get(`${API_BASE_URL}/categories`),
         axios.get(`${API_BASE_URL}/conditions`),
         axios.get(`${API_BASE_URL}/sim-configurations`),
         axios.get(`${API_BASE_URL}/cities`),
-        axios.get(`${API_BASE_URL}/listings/${listingId}`),
+        axios.get(`${API_BASE_URL}/listings/${listingId}`, { headers: authHeaders }),
       ]);
 
       setConditions(conditionsRes.data.conditions);
@@ -377,7 +382,7 @@ export default function EditListingScreen() {
 
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsMultipleSelection: true,
         quality: 0.8,
         allowsEditing: false,
