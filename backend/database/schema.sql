@@ -9,7 +9,6 @@ CREATE TABLE IF NOT EXISTS users (
     date_of_birth DATE,
     city VARCHAR(100),
     is_verified BOOLEAN DEFAULT FALSE,
-    is_admin BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

@@ -17,8 +17,13 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { useTheme } from '../context/ThemeContext';
-
-const API_BASE_URL = 'http://localhost:3000/api';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
+import { API_BASE_URL } from '../utils/api';
+import {
+  formatLocalDateYYYYMMDD,
+  parseLocalDateYYYYMMDD,
+  toLocalDateYYYYMMDD,
+} from '../utils/dateUtils';
 
 export default function EditProfileScreen() {
   const navigation = useNavigation();
@@ -50,18 +55,8 @@ export default function EditProfileScreen() {
 
       const user = response.data.user;
       
-      // Format date_of_birth to show only date (YYYY-MM-DD) without time
-      let formattedDateOfBirth = '';
-      if (user.date_of_birth) {
-        const date = new Date(user.date_of_birth);
-        if (!isNaN(date.getTime())) {
-          // Format as YYYY-MM-DD
-          formattedDateOfBirth = date.toISOString().split('T')[0];
-        } else {
-          // If it's already in YYYY-MM-DD format, use it directly
-          formattedDateOfBirth = user.date_of_birth.split('T')[0];
-        }
-      }
+      // Format date_of_birth as local YYYY-MM-DD (no UTC shift)
+      const formattedDateOfBirth = toLocalDateYYYYMMDD(user.date_of_birth);
       
       setFormData({
         first_name: user.first_name || '',
@@ -89,8 +84,7 @@ export default function EditProfileScreen() {
     }
     
     if (event.type === 'set' && selectedDate) {
-      const formattedDate = selectedDate.toISOString().split('T')[0];
-      handleInputChange('date_of_birth', formattedDate);
+      handleInputChange('date_of_birth', formatLocalDateYYYYMMDD(selectedDate));
     } else if (Platform.OS === 'android' && event.type === 'dismissed') {
       setShowDatePicker(false);
     }
@@ -122,10 +116,10 @@ export default function EditProfileScreen() {
         },
       ]);
     } catch (error) {
-      console.error('Error updating profile:', error);
+      logApiError('EditProfileScreen.updateProfile', error);
       Alert.alert(
         'Error',
-        error.response?.data?.error || 'Failed to update profile'
+        getApiErrorMessage(error, 'Failed to update profile')
       );
     } finally {
       setLoading(false);
@@ -227,7 +221,7 @@ export default function EditProfileScreen() {
             </TouchableOpacity>
             {showDatePicker && Platform.OS === 'android' && (
               <DateTimePicker
-                value={formData.date_of_birth ? new Date(formData.date_of_birth) : new Date(2000, 0, 1)}
+                value={parseLocalDateYYYYMMDD(formData.date_of_birth)}
                 mode="date"
                 display="default"
                 onChange={handleDateChange}
@@ -242,7 +236,7 @@ export default function EditProfileScreen() {
                   </TouchableOpacity>
                 </View>
                 <DateTimePicker
-                  value={formData.date_of_birth ? new Date(formData.date_of_birth) : new Date(2000, 0, 1)}
+                  value={parseLocalDateYYYYMMDD(formData.date_of_birth)}
                   mode="date"
                   display="spinner"
                   onChange={handleDateChange}

@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import apiClient from '../utils/api';
+import apiClient, { resolveMediaUrl } from '../utils/api';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useFavorites } from '../context/FavoritesContext';
@@ -116,7 +116,7 @@ export default function SavedListingsScreen() {
     >
       <View style={styles.cardImageContainer}>
         {item.thumbnail_image ? (
-          <Image source={{ uri: item.thumbnail_image }} style={styles.cardImage} resizeMode="cover" />
+          <Image source={{ uri: resolveMediaUrl(item.thumbnail_image) }} style={styles.cardImage} resizeMode="cover" />
         ) : (
           <View style={[styles.cardImage, { backgroundColor: colors.borderLight }]} />
         )}

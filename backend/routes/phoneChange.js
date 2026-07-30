@@ -4,8 +4,10 @@ const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
 const pool = require('../config/database');
 const verifyToken = require('../middleware/verifyToken');
-const { OTP_PURPOSE, issueOtp, consumeOtp, otpValidator, sendOtpError, OTP_TTL_MINUTES } = require('../utils/otp');
+const { getJwtSecret } = require('../config/env');
+const { OTP_PURPOSE, issueOtp, consumeOtp, otpValidator, sendOtpError, OTP_TTL_MINUTES, shouldExposeOtpInResponse } = require('../utils/otp');
 const { normalizePhoneNumber, phoneNumberVariants, isSamePhoneNumber, phoneNumberValidator } = require('../utils/phone');
+const { otpRequestLimiter, otpVerifyLimiter } = require('../middleware/rateLimits');
 
 /**
  * Change Phone Number, verified by OTP.
@@ -30,7 +32,7 @@ const rejectInvalid = (req, res) => {
 const signSessionToken = (user) =>
   jwt.sign(
     { userId: user.id, phoneNumber: user.phone_number },
-    process.env.JWT_SECRET || 'your-secret-key',
+    getJwtSecret(),
     { expiresIn: '30d' }
   );
 
@@ -49,7 +51,7 @@ router.use(verifyToken);
  * Validates the new number, sends it an OTP, and records the pending change.
  * The user record keeps its current phone number.
  */
-router.post('/request', [phoneNumberValidator('new_phone_number')], async (req, res) => {
+router.post('/request', otpRequestLimiter, [phoneNumberValidator('new_phone_number')], async (req, res) => {
   if (rejectInvalid(req, res)) return;
 
   try {
@@ -108,8 +110,7 @@ router.post('/request', [phoneNumberValidator('new_phone_number')], async (req, 
       new_phone_number: newPhoneNumber,
       expires_at: expiresAt,
       expires_in_minutes: OTP_TTL_MINUTES,
-      // Mirrors the auth routes' test mode, where the code is returned instead of texted.
-      otp: code,
+      ...(shouldExposeOtpInResponse() ? { otp: code } : {}),
     });
   } catch (error) {
     console.error('Error requesting phone number change:', error);
@@ -121,7 +122,7 @@ router.post('/request', [phoneNumberValidator('new_phone_number')], async (req, 
  * POST /api/profile/change-phone/verify
  * Redeems the code and promotes the pending number to the account's number.
  */
-router.post('/verify', [otpValidator('otp')], async (req, res) => {
+router.post('/verify', otpVerifyLimiter, [otpValidator('otp')], async (req, res) => {
   if (rejectInvalid(req, res)) return;
 
   try {

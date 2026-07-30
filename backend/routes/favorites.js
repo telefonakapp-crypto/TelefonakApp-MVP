@@ -8,25 +8,7 @@ const { PUBLIC_LISTING_STATUSES: VISIBLE_LISTING_STATUSES } = require('../utils/
 // Saved listings belong to other sellers, so their view counter stays hidden.
 const withoutViewCount = ({ views, ...listing }) => listing;
 
-const verifyToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
-
-  try {
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    if (!decoded.userId) {
-      return res.status(401).json({ error: 'User ID not found in token' });
-    }
-    req.user = decoded;
-    next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-};
+const verifyToken = require('../middleware/verifyToken').requireUserId;
 
 const parseListingId = (raw) => {
   const listingId = parseInt(raw, 10);

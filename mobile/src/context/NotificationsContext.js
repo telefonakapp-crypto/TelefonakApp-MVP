@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../utils/api';
+import { logApiError } from '../utils/apiError';
 
 const NotificationsContext = createContext(null);
 
@@ -42,7 +43,7 @@ export const NotificationsProvider = ({ children }) => {
       const response = await apiClient.get('/notifications/unread-count');
       setUnreadCount(response.data.unread || 0);
     } catch (error) {
-      console.error('Error fetching unread notification count:', error);
+      logApiError('NotificationsContext.refreshUnreadCount', error);
       setUnreadCount(0);
     } finally {
       inFlight.current = false;

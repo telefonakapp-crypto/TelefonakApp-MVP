@@ -117,7 +117,6 @@ Key Fields:
 - gender
 - city
 - is_verified
-- is_admin
 
 ---
 

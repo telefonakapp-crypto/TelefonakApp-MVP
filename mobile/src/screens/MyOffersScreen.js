@@ -13,7 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import apiClient from '../utils/api';
+import apiClient, { resolveMediaUrl } from '../utils/api';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
@@ -61,7 +61,7 @@ export default function MyOffersScreen() {
         activeOpacity={0.8}
       >
         {item.thumbnail_image ? (
-          <Image source={{ uri: item.thumbnail_image }} style={styles.thumbnail} />
+          <Image source={{ uri: resolveMediaUrl(item.thumbnail_image) }} style={styles.thumbnail} />
         ) : (
           <View style={[styles.thumbnail, { backgroundColor: colors.inputBackground }]}>
             <Ionicons name="image-outline" size={22} color={colors.textSecondary} />

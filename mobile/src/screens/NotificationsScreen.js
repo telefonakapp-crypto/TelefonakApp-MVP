@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,6 +12,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import apiClient from '../utils/api';
+import { logApiError } from '../utils/apiError';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useNotifications } from '../context/NotificationsContext';
@@ -40,21 +41,26 @@ export default function NotificationsScreen() {
     };
   }, []);
 
-  const loadFirstPage = useCallback(async () => {
+  const listFetchInFlight = useRef(false);
+
+  const loadFirstPage = useCallback(async ({ force = false } = {}) => {
+    if (!force && listFetchInFlight.current) return;
+    listFetchInFlight.current = true;
     try {
       const { rows, hasMore: more } = await fetchPage(0);
       setNotifications(rows);
       setHasMore(more);
     } catch (error) {
-      console.error('Error fetching notifications:', error.response?.data || error.message);
+      logApiError('NotificationsScreen.loadFirstPage', error);
     } finally {
+      listFetchInFlight.current = false;
       setLoading(false);
       setRefreshing(false);
     }
   }, [fetchPage]);
 
   const handleLoadMore = useCallback(async () => {
-    if (loading || loadingMore || !hasMore) return;
+    if (loading || loadingMore || !hasMore || listFetchInFlight.current) return;
 
     setLoadingMore(true);
     try {
@@ -65,26 +71,24 @@ export default function NotificationsScreen() {
       });
       setHasMore(more);
     } catch (error) {
-      console.error('Error loading more notifications:', error.response?.data || error.message);
+      logApiError('NotificationsScreen.loadMore', error);
     } finally {
       setLoadingMore(false);
     }
   }, [fetchPage, hasMore, loading, loadingMore, notifications.length]);
 
-  useEffect(() => {
-    loadFirstPage();
-  }, [loadFirstPage]);
-
-  // Opening this screen refreshes the data but deliberately does not mark anything as read.
+  // Refresh the list whenever this screen is focused so new notifications
+  // appear without relying only on the unread badge.
   useFocusEffect(
     useCallback(() => {
+      loadFirstPage();
       refreshUnreadCount();
-    }, [refreshUnreadCount])
+    }, [loadFirstPage, refreshUnreadCount])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
-    loadFirstPage();
+    loadFirstPage({ force: true });
     refreshUnreadCount();
   };
 
@@ -95,7 +99,7 @@ export default function NotificationsScreen() {
     try {
       await apiClient.patch(`/notifications/${id}/read`);
     } catch (error) {
-      console.error('Error marking notification as read:', error.response?.data || error.message);
+      logApiError('NotificationsScreen.markAsRead', error);
       setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: false } : n)));
       refreshUnreadCount();
     }
@@ -109,7 +113,7 @@ export default function NotificationsScreen() {
     try {
       await apiClient.patch('/notifications/read-all');
     } catch (error) {
-      console.error('Error marking all notifications as read:', error.response?.data || error.message);
+      logApiError('NotificationsScreen.markAllAsRead', error);
       setNotifications(previous);
       refreshUnreadCount();
     }

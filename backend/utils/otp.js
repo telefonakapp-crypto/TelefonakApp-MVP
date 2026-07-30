@@ -1,4 +1,6 @@
+const crypto = require('crypto');
 const { body } = require('express-validator');
+const { isProduction } = require('../config/env');
 
 /**
  * Shared OTP service, used by every flow that needs a one-time code (login,
@@ -35,24 +37,48 @@ const OTP_ERROR = {
   ATTEMPTS_EXCEEDED: 'attempts_exceeded',
 };
 
-// Test mode returns a fixed code; production swaps this for a random one.
+// Development returns a fixed code so mobile QA stays simple without SMS.
 const TEST_MODE_CODE = '1234';
 
-// TODO: Replace with a cryptographically random code when the SMS provider is live
 function generateOtpCode() {
+  if (isProduction() || process.env.OTP_MODE === 'random') {
+    return String(crypto.randomInt(1000, 10000));
+  }
   return TEST_MODE_CODE;
 }
 
-// Mock delivery — replace with Twilio in production.
+/** Dev/test clients may echo OTP in JSON; production must never. */
+function shouldExposeOtpInResponse() {
+  return !isProduction();
+}
+
 async function sendOtp(phoneNumber, code) {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_PHONE_NUMBER;
+
+  if (sid && token && from && !sid.startsWith('your_')) {
+    try {
+      const twilio = require('twilio');
+      const client = twilio(sid, token);
+      await client.messages.create({
+        body: `Your Telefonak verification code is: ${code}`,
+        from,
+        to: phoneNumber,
+      });
+      return true;
+    } catch (error) {
+      console.error('[otp] Twilio send failed:', error.message || error);
+      throw error;
+    }
+  }
+
   console.log(`[TEST MODE] OTP for ${phoneNumber}: ${code}`);
-  // const twilio = require('twilio');
-  // const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-  // await client.messages.create({
-  //   body: `Your Telefonak verification code is: ${code}`,
-  //   from: process.env.TWILIO_PHONE_NUMBER,
-  //   to: phoneNumber,
-  // });
+  if (isProduction()) {
+    console.warn(
+      '[otp] Production OTP issued without Twilio credentials — configure TWILIO_* before launch'
+    );
+  }
   return true;
 }
 
@@ -259,6 +285,7 @@ module.exports = {
   OTP_ERROR,
   generateOtpCode,
   sendOtp,
+  shouldExposeOtpInResponse,
   issueOtp,
   consumeOtp,
   sendOtpError,

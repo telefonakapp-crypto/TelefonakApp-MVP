@@ -239,7 +239,7 @@ Anything not listed here should be considered out of scope unless it is explicit
 | ID | Item | Priority | Status | Notes |
 |----|------|----------|--------|-------|
 | TD-01 | Create shared mobile component library (`src/components/`) | P1 | ⬜ | Listing cards, buttons, inputs, empty states |
-| TD-02 | Extract shared backend middleware (`verifyToken`, `verifyAdmin`) | P1 | ⬜ | Currently duplicated across route files |
+| TD-02 | Extract shared backend middleware (`verifyToken`, `verifyAdminAuth`) | P1 | ⬜ | Keep customer and Admin Web auth helpers consistent |
 | TD-03 | Enforce single shared mobile API client everywhere | P1 | ⬜ | Related to S1-05 / S1-06 |
 | TD-04 | Introduce AuthContext (or equivalent) for session state | P2 | ⬜ | Avoid remount-only auth awareness |
 | TD-05 | Backend folder restructuring (controllers / services / middleware) | P2 | ⬜ | Align with architecture doc over time |

@@ -25,12 +25,17 @@ import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import { useModelOptions } from '../hooks/useModelOptions';
 import { filterMvpCategories, localizedCategoryName } from '../utils/mvpCategories';
+import {
+  LISTING_IMAGE_PICKER_OPTIONS,
+  normalizeListingImageAsset,
+  appendListingImagesToFormData,
+} from '../utils/listingImages';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
+import { API_BASE_URL } from '../utils/api';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ITEM_HEIGHT = 50;
 const VISIBLE_ITEMS = 5;
-
-const API_BASE_URL = 'http://localhost:3000/api';
 
 export default function CreateListingScreen() {
   const navigation = useNavigation();
@@ -360,16 +365,16 @@ export default function CreateListingScreen() {
     if (!hasPermission) return;
 
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: true,
-        quality: 0.8,
-        allowsEditing: false,
-      });
+      const result = await ImagePicker.launchImageLibraryAsync(LISTING_IMAGE_PICKER_OPTIONS);
 
       if (!result.canceled && result.assets) {
-        const newImages = result.assets.map(asset => asset.uri);
-        setImages([...images, ...newImages].slice(0, 10)); // Limit to 10 images
+        // Normalize at pick-time so HEIC/HEIF from iOS become JPEG before upload.
+        const normalized = [];
+        for (let i = 0; i < result.assets.length; i += 1) {
+          const part = await normalizeListingImageAsset(result.assets[i], i);
+          normalized.push(part.uri);
+        }
+        setImages([...images, ...normalized].slice(0, 10)); // Limit to 10 images
       }
     } catch (error) {
       console.error('Error picking image:', error);
@@ -453,6 +458,16 @@ export default function CreateListingScreen() {
       }, 300);
       return;
     }
+
+    const priceValue = Number(formData.price);
+    if (!Number.isFinite(priceValue) || priceValue < 0.01) {
+      Alert.alert('Error', 'Please enter a valid price greater than 0');
+      scrollToField('price');
+      setTimeout(() => {
+        priceInputRef.current?.focus();
+      }, 300);
+      return;
+    }
     
     if (!formData.city_id) {
       Alert.alert('Error', 'Please select a city');
@@ -475,18 +490,7 @@ export default function CreateListingScreen() {
       let imageUrls = [];
       if (images.length > 0) {
         const uploadFormData = new FormData();
-        images.forEach((uri, index) => {
-          const fileName = uri.split('/').pop() || `photo_${index}.jpg`;
-          const extMatch = /\.(\w+)$/.exec(fileName);
-          const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
-          const mimeType =
-            ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-          uploadFormData.append('images', {
-            uri,
-            name: fileName,
-            type: mimeType,
-          });
-        });
+        await appendListingImagesToFormData(uploadFormData, images);
 
         const uploadResponse = await axios.post(
           `${API_BASE_URL}/upload/listing-images`,
@@ -531,12 +535,11 @@ export default function CreateListingScreen() {
         },
       ]);
     } catch (error) {
-      console.error('Error creating listing:', error);
-      const apiError =
-        error.response?.data?.error ||
-        error.response?.data?.errors?.[0]?.msg ||
-        null;
-      Alert.alert('Error', apiError || 'Failed to create listing');
+      logApiError('CreateListingScreen.createListing', error);
+      Alert.alert(
+        t('common.error'),
+        getApiErrorMessage(error, t('createListing.createFailed'))
+      );
     } finally {
       setLoading(false);
     }

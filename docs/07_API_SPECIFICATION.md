@@ -405,153 +405,74 @@ Authentication Required.
 
 ---
 
-# 12. Advertisements
+# 12. Banners
 
-## Get Active Ads
+Marketing banners for the Home carousel. `action_type` must be one of: `none`, `url`, `screen`, `listing`.
+
+## Get Active Banners
 
 GET
 
 ```
-/ads
+/banners
 ```
 
 Public.
 
-Returns active promotional banners.
+Returns active, in-schedule banners ordered by `display_order`.
+
+Response fields: `id`, `title`, `image_url`, `action_type`, `action_value`, `display_order`, `starts_at`, `ends_at`.
 
 ---
 
-# 13. Admin Authentication
+# 13. Admin Web Authentication
+
+Staff authenticate against the `admins` table (email + password). Middleware: `verifyAdminAuth`.
 
 ## Admin Login
 
 POST
 
 ```
-/admin/login
+/admin/auth/login
 ```
 
-Administrator only.
+Request: `{ "email", "password" }` → `{ token, admin }`.
 
----
-
-# 14. Admin Listings
-
-## Pending Listings
+## Current Admin
 
 GET
 
 ```
-/admin/listings/pending
+/admin/auth/me
 ```
 
-Administrator only.
+Requires Admin Web JWT.
 
 ---
 
-## Approve Listing
+# 14. Admin Web Modules
 
-PUT
+All routes below require Admin Web JWT (`Authorization: Bearer <admin-jwt>`).
 
-```
-/admin/listings/{id}/approve
-```
+| Area | Base path |
+|------|-----------|
+| Dashboard | `/admin/dashboard` |
+| Listings moderation | `/admin/listings` |
+| Banners | `/admin/banners` |
+| Users | `/admin/users` |
+| Admins (super_admin) | `/admin/admins` |
+| Reports | `/admin/reports` |
+| Settings | `/admin/settings` |
+| Audit logs | `/admin/audit-logs` |
+| Staff notifications | `/admin/notifications` |
+| Banner image upload | `/admin/upload/image` |
 
-Administrator only.
-
----
-
-## Reject Listing
-
-PUT
-
-```
-/admin/listings/{id}/reject
-```
-
-Administrator only.
-
-Request Body:
-
-```
-{
-    "reason": "..."
-}
-```
+Public marketplace banners remain `GET /banners` only. Banner CRUD is Admin Web-only under `/admin/banners`.
 
 ---
 
-# 15. Admin Users
-
-## Get Users
-
-GET
-
-```
-/admin/users
-```
-
-Administrator only.
-
----
-
-## Suspend User
-
-PUT
-
-```
-/admin/users/{id}/suspend
-```
-
-Future feature.
-
----
-
-## Reactivate User
-
-PUT
-
-```
-/admin/users/{id}/activate
-```
-
-Future feature.
-
----
-
-# 16. Admin Ads
-
-## Create Banner
-
-POST
-
-```
-/admin/ads
-```
-
----
-
-## Update Banner
-
-PUT
-
-```
-/admin/ads/{id}
-```
-
----
-
-## Delete Banner
-
-DELETE
-
-```
-/admin/ads/{id}
-```
-
----
-
-# 17. HTTP Status Codes
+# 15. HTTP Status Codes
 
 Standard responses:
 

@@ -3,14 +3,22 @@ const router = express.Router();
 const pool = require('../config/database');
 const { body, validationResult } = require('express-validator');
 const jwt = require('jsonwebtoken');
-const bcrypt = require('bcryptjs');
-const { OTP_PURPOSE, issueOtp, consumeOtp, otpValidator, sendOtpError } = require('../utils/otp');
+const { getJwtSecret } = require('../config/env');
+const { otpRequestLimiter, otpVerifyLimiter } = require('../middleware/rateLimits');
+const {
+  OTP_PURPOSE,
+  issueOtp,
+  consumeOtp,
+  otpValidator,
+  sendOtpError,
+  shouldExposeOtpInResponse,
+} = require('../utils/otp');
 
 // Request OTP
-router.post('/request-otp', 
-  [
-    body('phone_number').isMobilePhone('ar-JO').withMessage('Invalid Jordanian phone number')
-  ],
+router.post(
+  '/request-otp',
+  otpRequestLimiter,
+  [body('phone_number').isMobilePhone('ar-JO').withMessage('Invalid Jordanian phone number')],
   async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -19,7 +27,6 @@ router.post('/request-otp',
       }
 
       const { phone_number } = req.body;
-      // Cooldown and hourly request limits are enforced by the shared service.
       const issued = await issueOtp(pool, {
         phoneNumber: phone_number,
         purpose: OTP_PURPOSE.AUTH,
@@ -29,11 +36,11 @@ router.post('/request-otp',
         return sendOtpError(res, issued);
       }
 
-      res.json({ 
-        message: 'OTP sent successfully',
-        // Always return OTP in test mode (hardcoded to 1234)
-        otp: issued.code
-      });
+      const payload = { message: 'OTP sent successfully' };
+      if (shouldExposeOtpInResponse()) {
+        payload.otp = issued.code;
+      }
+      res.json(payload);
     } catch (error) {
       console.error('Error requesting OTP:', error);
       res.status(500).json({ error: 'Failed to send OTP' });
@@ -42,10 +49,12 @@ router.post('/request-otp',
 );
 
 // Verify OTP
-router.post('/verify-otp',
+router.post(
+  '/verify-otp',
+  otpVerifyLimiter,
   [
     body('phone_number').isMobilePhone('ar-JO').withMessage('Invalid Jordanian phone number'),
-    otpValidator('otp')
+    otpValidator('otp'),
   ],
   async (req, res) => {
     try {
@@ -66,15 +75,21 @@ router.post('/verify-otp',
         return sendOtpError(res, consumed);
       }
 
-      // Check if user already exists
-      const userResult = await pool.query('SELECT * FROM users WHERE phone_number = $1', [phone_number]);
+      const userResult = await pool.query('SELECT * FROM users WHERE phone_number = $1', [
+        phone_number,
+      ]);
       const existingUser = userResult.rows[0];
 
       if (existingUser && existingUser.is_verified) {
-        // User exists and is verified - return full token and go directly to Home
+        if (existingUser.is_active === false) {
+          return res.status(403).json({
+            error: 'Account is disabled. Please contact support.',
+          });
+        }
+
         const token = jwt.sign(
           { userId: existingUser.id, phoneNumber: existingUser.phone_number },
-          process.env.JWT_SECRET || 'your-secret-key',
+          getJwtSecret(),
           { expiresIn: '30d' }
         );
 
@@ -82,22 +97,21 @@ router.post('/verify-otp',
           message: 'Login successful',
           token: token,
           user: existingUser,
-          isNewUser: false
-        });
-      } else {
-        // New user or not verified - need to complete registration
-        const token = jwt.sign(
-          { phoneNumber: phone_number, verified: true },
-          process.env.JWT_SECRET || 'your-secret-key',
-          { expiresIn: '1h' }
-        );
-
-        return res.json({
-          message: 'OTP verified successfully. Please complete registration.',
-          token: token,
-          isNewUser: true
+          isNewUser: false,
         });
       }
+
+      const token = jwt.sign(
+        { phoneNumber: phone_number, verified: true },
+        getJwtSecret(),
+        { expiresIn: '1h' }
+      );
+
+      return res.json({
+        message: 'OTP verified successfully. Please complete registration.',
+        token: token,
+        isNewUser: true,
+      });
     } catch (error) {
       console.error('Error verifying OTP:', error);
       res.status(500).json({ error: 'Failed to verify OTP' });
@@ -106,4 +120,3 @@ router.post('/verify-otp',
 );
 
 module.exports = router;
-

@@ -1,10 +1,8 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE_URL, API_ORIGIN, resolveMediaUrl } from '../config/apiConfig';
 
-// Use localhost for iOS simulator; Android emulator needs 10.0.2.2
-const API_BASE_URL = 'http://localhost:3000/api';
-
-// Create axios instance with default config
+// Shared axios client — base URL comes from EXPO_PUBLIC_API_URL via apiConfig.
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -12,7 +10,6 @@ const apiClient = axios.create({
   },
 });
 
-// Request interceptor to add auth token
 apiClient.interceptors.request.use(
   async (config) => {
     try {
@@ -25,11 +22,8 @@ apiClient.interceptors.request.use(
     }
     return config;
   },
-  (error) => {
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
 export default apiClient;
-export { API_BASE_URL };
-
+export { API_BASE_URL, API_ORIGIN, resolveMediaUrl };

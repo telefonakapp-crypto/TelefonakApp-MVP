@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import apiClient from '../utils/api';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
@@ -58,9 +59,10 @@ export default function ChangePhoneScreen() {
         Alert.alert(t('auth.otpSent'), `Your OTP is: ${response.data.otp} (Development mode)`);
       }
     } catch (error) {
+      logApiError('ChangePhoneScreen.requestOTP', error);
       Alert.alert(
         t('common.error'),
-        error.response?.data?.error || t('auth.failedToSendOTP')
+        getApiErrorMessage(error, t('auth.failedToSendOTP'))
       );
     } finally {
       setLoading(false);

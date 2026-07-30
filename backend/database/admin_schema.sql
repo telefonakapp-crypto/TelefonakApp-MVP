@@ -1,6 +1,3 @@
--- Add admin role to users table
-ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE;
-
 -- Standardize listing status workflow:
 -- pending → approved → sold | deleted
 -- pending → declined | deleted

@@ -71,7 +71,7 @@ export default function SettingsScreen() {
               clearUnreadCount();
               navigation.reset({
                 index: 0,
-                routes: [{ name: 'Login' }],
+                routes: [{ name: 'AuthChoice' }],
               });
             } catch (error) {
               console.error('Logout error:', error);

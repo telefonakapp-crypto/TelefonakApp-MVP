@@ -11,7 +11,8 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
-import apiClient, { API_BASE_URL } from '../utils/api';
+import apiClient from '../utils/api';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
 import { formatPhoneNumber, PHONE_NUMBER_LENGTH } from '../utils/phone';
 
 export default function SignUpPhoneScreen() {
@@ -38,9 +39,10 @@ export default function SignUpPhoneScreen() {
         }
       }
     } catch (error) {
+      logApiError('SignUpPhoneScreen.requestOTP', error);
       Alert.alert(
         'Error',
-        error.response?.data?.error || 'Failed to send OTP. Please try again.'
+        getApiErrorMessage(error, 'Failed to send OTP. Please try again.')
       );
     } finally {
       setLoading(false);

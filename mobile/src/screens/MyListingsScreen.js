@@ -12,14 +12,15 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
 
-const API_BASE_URL = 'http://localhost:3000/api';
+import { API_BASE_URL, resolveMediaUrl } from '../utils/api';
 
 // Mirrors TERMINAL_LISTING_STATUSES on the backend: these listings are history
 // and carry no actions.
@@ -27,61 +28,25 @@ const TERMINAL_STATUSES = ['sold', 'deleted'];
 
 export default function MyListingsScreen() {
   const navigation = useNavigation();
-  const route = useRoute();
   const { colors, isDarkMode } = useTheme();
   const { t, isRTL } = useLanguage();
-  const { isAdmin: routeIsAdmin } = route.params || {};
   const [listings, setListings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [isAdmin, setIsAdmin] = useState(false);
-  const [currentUserId, setCurrentUserId] = useState(null);
 
-  const fetchAdminStatus = async () => {
-    try {
-      const token = await AsyncStorage.getItem('authToken');
-      if (!token) {
-        setIsAdmin(false);
-        return;
-      }
-
-      const response = await axios.get(`${API_BASE_URL}/user/profile`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      setIsAdmin(response.data.user?.is_admin === true);
-      setCurrentUserId(response.data.user?.id);
-    } catch (error) {
-      console.error('Error fetching admin status:', error);
-      setIsAdmin(false);
-    }
-  };
+  // /listings/user/my is always the caller's listings — owner actions are always allowed.
+  const isListingOwner = () => true;
 
   const fetchListings = async () => {
     try {
       const token = await AsyncStorage.getItem('authToken');
       if (!token) return;
 
-      // Check if user is admin (use route param or fetch)
-      const adminStatus = routeIsAdmin !== undefined ? routeIsAdmin : isAdmin;
-      
-      let response;
-      if (adminStatus) {
-        // Admin: fetch all listings with all statuses
-        response = await axios.get(`${API_BASE_URL}/admin/listings/all?status=all`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-      } else {
-        // Regular user: fetch only their listings
-        response = await axios.get(`${API_BASE_URL}/listings/user/my`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-      }
+      const response = await axios.get(`${API_BASE_URL}/listings/user/my`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
       setListings(response.data.listings || []);
     } catch (error) {
       console.error('Error fetching listings:', error);
@@ -93,18 +58,13 @@ export default function MyListingsScreen() {
   };
 
   useEffect(() => {
-    fetchAdminStatus();
-  }, []);
-
-  useEffect(() => {
     fetchListings();
-  }, [isAdmin, routeIsAdmin]);
+  }, []);
 
   useFocusEffect(
     React.useCallback(() => {
-      fetchAdminStatus();
       fetchListings();
-    }, [isAdmin, routeIsAdmin])
+    }, [])
   );
 
   const onRefresh = () => {
@@ -170,10 +130,10 @@ export default function MyListingsScreen() {
               Alert.alert(t('common.success'), t('myListings.markedAsSoldSuccess'));
               fetchListings();
             } catch (error) {
-              console.error('Error marking listing as sold:', error);
+              logApiError('MyListingsScreen.markAsSold', error);
               Alert.alert(
-                'Error',
-                error.response?.data?.error || 'Failed to mark listing as sold'
+                t('common.error'),
+                getApiErrorMessage(error, 'Failed to mark listing as sold')
               );
             }
           },
@@ -197,8 +157,11 @@ export default function MyListingsScreen() {
         action === 'hide' ? t('myListings.hiddenSuccess') : t('myListings.unhiddenSuccess')
       );
     } catch (error) {
-      console.error(`Error on listing ${action}:`, error.response?.data || error.message);
-      Alert.alert(t('common.error'), error.response?.data?.error || t('myListings.visibilityFailed'));
+      logApiError(`MyListingsScreen.${action}`, error);
+      Alert.alert(
+        t('common.error'),
+        getApiErrorMessage(error, t('myListings.visibilityFailed'))
+      );
       fetchListings();
     }
   };
@@ -239,8 +202,11 @@ export default function MyListingsScreen() {
               // Refetch so the card moves into the Deleted Listings section.
               fetchListings();
             } catch (error) {
-              console.error('Error deleting listing:', error.response?.data || error.message);
-              Alert.alert(t('common.error'), error.response?.data?.error || t('myListings.deleteFailed'));
+              logApiError('MyListingsScreen.deleteListing', error);
+              Alert.alert(
+                t('common.error'),
+                getApiErrorMessage(error, t('myListings.deleteFailed'))
+              );
             }
           },
         },
@@ -282,7 +248,7 @@ export default function MyListingsScreen() {
           <Ionicons name={isRTL ? "arrow-forward" : "arrow-back"} size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.text }, getTextAlign(isRTL, 'center')]}>
-          {(routeIsAdmin !== undefined ? routeIsAdmin : isAdmin) ? t('myListings.allListings') : t('myListings.myListings')}
+          {t('myListings.myListings')}
         </Text>
         <View style={{ width: 24 }} />
       </View>
@@ -348,7 +314,7 @@ export default function MyListingsScreen() {
                 <View style={styles.listingInfo}>
                   {listing.thumbnail_image ? (
                     <Image
-                      source={{ uri: listing.thumbnail_image }}
+                      source={{ uri: resolveMediaUrl(listing.thumbnail_image) }}
                       style={[styles.thumbnail, isHistory && styles.soldThumbnail, { marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }]}
                     />
                   ) : (
@@ -388,7 +354,7 @@ export default function MyListingsScreen() {
                       </Text>
                     </View>
                     {/* Sellers see view counts for their own listings only */}
-                    {listing.user_id === currentUserId && listing.views !== undefined && listing.views !== null && (
+                    {isListingOwner(listing) && listing.views !== undefined && listing.views !== null && (
                       <View style={[styles.listingMeta, getFlexDirection(isRTL, 'row')]}>
                         <Ionicons
                           name="eye-outline"
@@ -425,7 +391,7 @@ export default function MyListingsScreen() {
                     <Ionicons name="eye-outline" size={20} color={colors.primary} style={{ marginRight: isRTL ? 0 : 6, marginLeft: isRTL ? 6 : 0 }} />
                     <Text style={[styles.actionButtonText, { color: colors.primary }, getTextAlign(isRTL, 'auto')]}>{t('myListings.view')}</Text>
                   </TouchableOpacity>
-                  {(listing.status === 'pending' || listing.status === 'approved') && listing.user_id === currentUserId && (
+                  {(listing.status === 'pending' || listing.status === 'approved' || listing.status === 'declined') && isListingOwner(listing) && (
                     <TouchableOpacity
                       style={[styles.actionButton, { backgroundColor: colors.inputBackground }, getFlexDirection(isRTL, 'row')]}
                       onPress={() => navigation.navigate('EditListing', { listingId: listing.id })}
@@ -434,7 +400,7 @@ export default function MyListingsScreen() {
                       <Text style={[styles.actionButtonText, { color: colors.warning }, getTextAlign(isRTL, 'auto')]}>{t('myListings.edit')}</Text>
                     </TouchableOpacity>
                   )}
-                  {listing.status === 'approved' && listing.user_id === currentUserId && (
+                  {listing.status === 'approved' && isListingOwner(listing) && (
                     <TouchableOpacity
                       style={[styles.actionButton, styles.soldButton, { backgroundColor: isDarkMode ? '#064e3b' : '#d1fae5' }, getFlexDirection(isRTL, 'row')]}
                       onPress={() => handleMarkAsSold(listing.id)}
@@ -443,7 +409,7 @@ export default function MyListingsScreen() {
                       <Text style={[styles.actionButtonText, styles.soldButtonText, { color: colors.success }, getTextAlign(isRTL, 'auto')]}>{t('myListings.markAsSold')}</Text>
                     </TouchableOpacity>
                   )}
-                  {listing.status === 'approved' && listing.user_id === currentUserId && (
+                  {listing.status === 'approved' && isListingOwner(listing) && (
                     <TouchableOpacity
                       style={[styles.actionButton, { backgroundColor: colors.inputBackground }, getFlexDirection(isRTL, 'row')]}
                       onPress={() => handleHideListing(listing.id)}
@@ -452,7 +418,7 @@ export default function MyListingsScreen() {
                       <Text style={[styles.actionButtonText, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>{t('myListings.hide')}</Text>
                     </TouchableOpacity>
                   )}
-                  {listing.status === 'hidden' && listing.user_id === currentUserId && (
+                  {listing.status === 'hidden' && isListingOwner(listing) && (
                     <TouchableOpacity
                       style={[styles.actionButton, { backgroundColor: colors.inputBackground }, getFlexDirection(isRTL, 'row')]}
                       onPress={() => setListingVisibility(listing.id, 'unhide')}
@@ -462,7 +428,7 @@ export default function MyListingsScreen() {
                     </TouchableOpacity>
                   )}
                   {/* Deleting is owner-only, so admins browsing all listings don't see it */}
-                  {listing.user_id === currentUserId && (
+                  {isListingOwner(listing) && (
                     <TouchableOpacity
                       style={[styles.actionButton, styles.deleteButton, { backgroundColor: isDarkMode ? '#7f1d1d' : '#fee2e2' }, getFlexDirection(isRTL, 'row')]}
                       onPress={() => handleDeleteListing(listing.id)}

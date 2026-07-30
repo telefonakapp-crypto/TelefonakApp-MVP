@@ -87,32 +87,21 @@ const deleteLocalListingImageFile = (imageUrl) => {
   }
 };
 
-// Middleware to verify JWT token
-const verifyToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
+// Middleware to verify JWT token (rejects disabled marketplace accounts)
+const verifyToken = require('../middleware/verifyToken');
 
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
-
-  try {
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    req.user = decoded;
-    next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-};
-
-// Attaches req.user when a valid token is present, otherwise continues as a guest
+// Attaches req.user when a valid customer JWT is present, otherwise continues as a guest
 const optionalAuth = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
 
   if (token) {
     try {
       const jwt = require('jsonwebtoken');
-      req.user = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
+      const decoded = jwt.verify(token, require('../config/env').getJwtSecret());
+      // Ignore Admin Web staff tokens on customer listing routes.
+      if (!decoded.adminId) {
+        req.user = decoded;
+      }
     } catch (error) {
       // An unusable token simply means "treat this request as a guest"
     }
@@ -122,13 +111,9 @@ const optionalAuth = (req, res, next) => {
 };
 
 /**
- * The token carries no role, so moderation access needs a lookup. It only runs
- * on the rare path where a signed-in non-owner asks for a non-public listing.
+ * Customer JWTs carry no staff role. Non-public listings are owner-only;
+ * staff moderation uses Admin Web APIs under /api/admin/listings.
  */
-const isAdminUser = async (userId) => {
-  const result = await pool.query('SELECT is_admin FROM users WHERE id = $1', [userId]);
-  return result.rows[0]?.is_admin === true;
-};
 
 // Get all brands (optional ?category_id — only brands with models in that category)
 router.get('/brands', async (req, res) => {
@@ -257,9 +242,11 @@ router.post('/listings', verifyToken,
     body('sim_configuration_id').isInt().withMessage('SIM configuration is required'),
     body('condition_id').isInt().withMessage('Condition ID is required'),
     body('price').isFloat({ min: 0.01 }).withMessage('Price must be greater than 0'),
-    body('battery_percentage').optional().isInt({ min: 70, max: 100 }).withMessage('Battery percentage must be between 70 and 100'),
-    body('description').optional().isString(),
-    body('location').optional().isString(),
+    // Mobile sends null for optional empties (New condition has no battery, blank description/location).
+    // express-validator optional() skips undefined only unless nullable: true.
+    body('battery_percentage').optional({ nullable: true }).isInt({ min: 70, max: 100 }).withMessage('Battery percentage must be between 70 and 100'),
+    body('description').optional({ nullable: true }).isString(),
+    body('location').optional({ nullable: true }).isString(),
     body('city_id').optional({ nullable: true }).isInt().withMessage('Invalid city'),
     body('area_id').optional({ nullable: true }).isInt().withMessage('Invalid area'),
     body('images')
@@ -390,7 +377,9 @@ router.post('/listings', verifyToken,
           c.name as color_name,
           c.hex_code as color_hex,
           cond.name as condition_name,
-          sim.name as sim_configuration_name
+          sim.name as sim_configuration_name,
+          u.first_name as seller_first_name,
+          u.last_name as seller_last_name
          FROM listings l
          JOIN models m ON l.model_id = m.id
          JOIN brands b ON m.brand_id = b.id
@@ -398,21 +387,32 @@ router.post('/listings', verifyToken,
          JOIN colors c ON l.color_id = c.id
          JOIN conditions cond ON l.condition_id = cond.id
          LEFT JOIN sim_configurations sim ON l.sim_configuration_id = sim.id
+         JOIN users u ON u.id = l.user_id
          WHERE l.id = $1`,
         [listing.id]
       );
 
-      // Notify all admins about the new listing (never fails the creation)
+      // Notify active Admin Web staff (admins table) — never fails the creation
       const listingDetails = fullListing.rows[0];
+      const sellerName = `${listingDetails.seller_first_name || ''} ${listingDetails.seller_last_name || ''}`.trim();
       await notifyAdminsOfNewListing(pool, {
         listingId: listing.id,
         deviceName: `${listingDetails.brand_name} ${listingDetails.model_name}`,
+        brandName: listingDetails.brand_name,
+        modelName: listingDetails.model_name,
         price: listingDetails.price,
+        sellerName: sellerName || null,
+        submittedAt: listingDetails.created_at,
       });
+
+      // Keep the create response shape stable for mobile (omit seller_* join fields).
+      const listingResponse = { ...listingDetails };
+      delete listingResponse.seller_first_name;
+      delete listingResponse.seller_last_name;
 
       res.json({
         message: 'Listing created successfully',
-        listing: fullListing.rows[0]
+        listing: listingResponse,
       });
     } catch (error) {
       console.error('Error creating listing:', error);
@@ -644,7 +644,6 @@ router.get('/listings', async (req, res) => {
     console.error('Error fetching listings:', error);
     res.status(500).json({
       error: 'Failed to fetch listings',
-      details: error.message,
     });
   }
 });
@@ -735,13 +734,10 @@ router.get('/listings/:id', optionalAuth, async (req, res) => {
     const listing = listingResult.rows[0];
     const isOwner = Boolean(req.user?.userId) && listing.user_id === req.user.userId;
 
-    // A hidden (or pending/declined/deleted) listing exists only for its owner
-    // and for moderation. Everyone else gets the same answer as a missing id.
+    // A hidden (or pending/declined/deleted) listing exists only for its owner.
+    // Everyone else gets the same answer as a missing id.
     if (!isPublicListingStatus(listing.status) && !isOwner) {
-      const canModerate = req.user?.userId ? await isAdminUser(req.user.userId) : false;
-      if (!canModerate) {
-        return res.status(404).json({ error: 'Listing not found' });
-      }
+      return res.status(404).json({ error: 'Listing not found' });
     }
 
     res.json({
@@ -952,8 +948,8 @@ router.put('/listings/:id', verifyToken,
     body('condition_id').isInt().withMessage('Condition ID is required'),
     body('price').isFloat({ min: 0.01 }).withMessage('Price must be greater than 0'),
     body('battery_percentage').optional({ nullable: true }).isInt({ min: 70, max: 100 }).withMessage('Battery percentage must be between 70 and 100'),
-    body('description').optional().isString(),
-    body('location').optional().isString(),
+    body('description').optional({ nullable: true }).isString(),
+    body('location').optional({ nullable: true }).isString(),
     body('city_id').optional({ nullable: true }).isInt().withMessage('Invalid city'),
     body('area_id').optional({ nullable: true }).isInt().withMessage('Invalid area'),
     body('images').optional().isArray().withMessage('Images must be an array'),

@@ -12,9 +12,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import DropDownPicker from 'react-native-dropdown-picker';
 import { useNavigation, useRoute, CommonActions } from '@react-navigation/native';
 import apiClient from '../utils/api';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-aware-scroll-view';
+import { formatLocalDateYYYYMMDD, parseLocalDateYYYYMMDD } from '../utils/dateUtils';
 
 const isValidEmail = (email) => {
   const regex =
@@ -140,7 +142,7 @@ const [cityItems, setCityItems] = useState([
 
       if (response.data) {
         await AsyncStorage.setItem('authToken', response.data.token);
-        // Always go to Home - admins can access AdminDashboard from Profile
+        // Always go to Home after registration
         // Reset navigation stack to prevent going back to OTP/Login/Register
         navigation.dispatch(
           CommonActions.reset({
@@ -150,12 +152,11 @@ const [cityItems, setCityItems] = useState([
         );
       }
     } catch (error) {
-      console.error('Registration error:', error.response?.data || error.message);
-      const errorMessage = error.response?.data?.error || 
-                          error.response?.data?.errors?.[0]?.msg || 
-                          error.message || 
-                          'Failed to register. Please try again.';
-      Alert.alert('Error', errorMessage);
+      logApiError('RegisterScreen.register', error);
+      Alert.alert(
+        'Error',
+        getApiErrorMessage(error, 'Failed to register. Please try again.')
+      );
     } finally {
       setLoading(false);
     }
@@ -272,7 +273,7 @@ const [cityItems, setCityItems] = useState([
                     <DateTimePicker
                       value={
                         formData.date_of_birth
-                          ? new Date(formData.date_of_birth)
+                          ? parseLocalDateYYYYMMDD(formData.date_of_birth)
                           : new Date(2000, 0, 1)
                       }
                       mode="date"
@@ -284,7 +285,7 @@ const [cityItems, setCityItems] = useState([
                         if (event.type === 'set' && selectedDate) {
                           handleInputChange(
                             'date_of_birth',
-                            selectedDate.toISOString().split('T')[0]
+                            formatLocalDateYYYYMMDD(selectedDate)
                           );
                         }
                       }}
@@ -302,7 +303,7 @@ const [cityItems, setCityItems] = useState([
                       <DateTimePicker
                         value={
                           formData.date_of_birth
-                            ? new Date(formData.date_of_birth)
+                            ? parseLocalDateYYYYMMDD(formData.date_of_birth)
                             : new Date(2000, 0, 1)
                         }
                         mode="date"
@@ -314,7 +315,7 @@ const [cityItems, setCityItems] = useState([
                           if (selectedDate) {
                             handleInputChange(
                               'date_of_birth',
-                              selectedDate.toISOString().split('T')[0]
+                              formatLocalDateYYYYMMDD(selectedDate)
                             );
                           }
                         }}

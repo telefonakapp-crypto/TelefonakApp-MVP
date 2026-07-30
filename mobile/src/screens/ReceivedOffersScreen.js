@@ -13,7 +13,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import apiClient from '../utils/api';
+import apiClient, { resolveMediaUrl } from '../utils/api';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
@@ -59,8 +60,11 @@ export default function ReceivedOffersScreen() {
       const updated = response.data.offer;
       setOffers((prev) => prev.map((item) => (item.id === offer.id ? { ...item, ...updated } : item)));
     } catch (error) {
-      console.error(`Error on offer ${action}:`, error.response?.data || error.message);
-      Alert.alert(t('common.error'), error.response?.data?.error || t('offers.actionFailed'));
+      logApiError(`ReceivedOffersScreen.${action}`, error);
+      Alert.alert(
+        t('common.error'),
+        getApiErrorMessage(error, t('offers.actionFailed'))
+      );
       fetchOffers();
     } finally {
       setResolvingId(null);
@@ -93,7 +97,7 @@ export default function ReceivedOffersScreen() {
           activeOpacity={0.8}
         >
           {item.thumbnail_image ? (
-            <Image source={{ uri: item.thumbnail_image }} style={styles.thumbnail} />
+            <Image source={{ uri: resolveMediaUrl(item.thumbnail_image) }} style={styles.thumbnail} />
           ) : (
             <View style={[styles.thumbnail, { backgroundColor: colors.inputBackground }]}>
               <Ionicons name="image-outline" size={22} color={colors.textSecondary} />

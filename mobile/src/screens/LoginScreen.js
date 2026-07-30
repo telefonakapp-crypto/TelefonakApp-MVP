@@ -11,7 +11,8 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
-import apiClient, { API_BASE_URL } from '../utils/api';
+import apiClient from '../utils/api';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import { formatPhoneNumber, PHONE_NUMBER_LENGTH } from '../utils/phone';
@@ -41,9 +42,10 @@ export default function LoginScreen() {
         }
       }
     } catch (error) {
+      logApiError('LoginScreen.requestOTP', error);
       Alert.alert(
         t('common.error'),
-        error.response?.data?.error || t('auth.failedToSendOTP')
+        getApiErrorMessage(error, t('auth.failedToSendOTP'))
       );
     } finally {
       setLoading(false);

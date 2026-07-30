@@ -2,8 +2,11 @@
  * Notification creation. Every notification in the system is written through
  * this module so titles, messages, and type strings stay consistent.
  *
- * Adding a type (offer_received, offer_accepted, ...) means adding a constant
- * plus a builder here — no route needs to learn the table shape.
+ * Recipients:
+ * - Marketplace customers → notifications.user_id (users table)
+ * - Admin Web staff → notifications.admin_id (admins table)
+ *
+ * Same table, same create helpers — no parallel notification store.
  */
 
 const NOTIFICATION_TYPES = {
@@ -25,20 +28,35 @@ const LEGACY_NOTIFICATION_TYPES = ['listing_declined'];
 
 /**
  * @param {import('pg').Pool} pool
- * @param {{ userId: number, type: string, title: string, message: string, relatedListingId?: number|null }} notification
+ * @param {{
+ *   userId?: number|null,
+ *   adminId?: number|null,
+ *   type: string,
+ *   title: string,
+ *   message: string,
+ *   relatedListingId?: number|null
+ * }} notification
  * @returns {Promise<object>} the created row
  */
-async function createNotification(pool, { userId, type, title, message, relatedListingId = null }) {
-  if (!userId) throw new Error('createNotification requires a userId');
+async function createNotification(
+  pool,
+  { userId = null, adminId = null, type, title, message, relatedListingId = null }
+) {
+  if (!userId && !adminId) {
+    throw new Error('createNotification requires a userId or adminId');
+  }
+  if (userId && adminId) {
+    throw new Error('createNotification accepts only one of userId or adminId');
+  }
   if (!type) throw new Error('createNotification requires a type');
   if (!title) throw new Error('createNotification requires a title');
   if (!message) throw new Error('createNotification requires a message');
 
   const result = await pool.query(
-    `INSERT INTO notifications (user_id, related_listing_id, type, title, message)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO notifications (user_id, admin_id, related_listing_id, type, title, message)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-    [userId, relatedListingId, type, title, message]
+    [userId || null, adminId || null, relatedListingId, type, title, message]
   );
 
   return result.rows[0];
@@ -176,20 +194,85 @@ function notifySystem(pool, { userId, title, message, relatedListingId = null })
   });
 }
 
-/** Moderation queue heads-up for every admin. */
-async function notifyAdminsOfNewListing(pool, { listingId, deviceName, price }) {
+function formatSubmittedAt(value) {
+  if (!value) return null;
   try {
-    const admins = await pool.query('SELECT id FROM users WHERE is_admin = TRUE');
-    const priceText = price !== undefined && price !== null ? ` (${price} JOD)` : '';
+    return new Date(value).toISOString();
+  } catch {
+    return String(value);
+  }
+}
+
+function buildNewListingAdminMessage({
+  listingId,
+  sellerName,
+  brandName,
+  modelName,
+  deviceName,
+  price,
+  submittedAt,
+}) {
+  const device =
+    [brandName, modelName].filter(Boolean).join(' ').trim() ||
+    deviceName ||
+    null;
+  const lines = [`Listing #${listingId} is pending approval.`];
+
+  if (sellerName) lines.push(`Seller: ${sellerName}`);
+  if (device) lines.push(`Device: ${device}`);
+  if (price !== undefined && price !== null) {
+    lines.push(`Price: ${formatPrice(price)} JOD`);
+  }
+  const when = formatSubmittedAt(submittedAt);
+  if (when) lines.push(`Submitted: ${when}`);
+
+  return lines.join('\n');
+}
+
+/**
+ * Moderation queue heads-up for every active Admin Web staff member.
+ * Targets active Admin Web staff (admins.is_active = true).
+ * Does not use the legacy mobile OTP admin flag.
+ */
+async function notifyAdminsOfNewListing(
+  pool,
+  {
+    listingId,
+    deviceName,
+    brandName,
+    modelName,
+    price,
+    sellerName,
+    submittedAt,
+  }
+) {
+  try {
+    const admins = await pool.query(
+      'SELECT id FROM admins WHERE is_active = TRUE'
+    );
+
+    if (admins.rows.length === 0) {
+      return;
+    }
+
+    const message = buildNewListingAdminMessage({
+      listingId,
+      sellerName,
+      brandName,
+      modelName,
+      deviceName,
+      price,
+      submittedAt,
+    });
 
     await Promise.all(
       admins.rows.map((admin) =>
         safeCreateNotification(pool, {
-          userId: admin.id,
+          adminId: admin.id,
           relatedListingId: listingId,
           type: NOTIFICATION_TYPES.NEW_LISTING,
           title: 'New Listing Pending Approval',
-          message: `New listing pending approval: ${deviceName || `listing #${listingId}`}${priceText}`,
+          message,
         })
       )
     );
@@ -215,4 +298,5 @@ module.exports = {
   notifySystem,
   notifyAdminsOfNewListing,
   formatPrice,
+  buildNewListingAdminMessage,
 };

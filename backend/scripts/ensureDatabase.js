@@ -30,6 +30,15 @@ const MIGRATION_FILES = [
   { file: 'offers_schema.sql',            label: 'Offers / bids schema + indexes' },
   { file: 'phone_change_schema.sql',      label: 'OTP purpose scoping + pending phone change' },
   { file: 'otp_rate_limit_schema.sql',    label: 'OTP attempt counter + rate limit index' },
+  { file: 'admins_schema.sql',            label: 'Admin Web auth (admins table)' },
+  { file: 'listing_decline_reason.sql',   label: 'Listing decline_reason column' },
+  { file: 'banners_admin_fields.sql',     label: 'Banner subtitle + CTA text columns' },
+  { file: 'users_is_active.sql',          label: 'Marketplace users is_active column' },
+  { file: 'settings_schema.sql',          label: 'Marketplace settings key/value store' },
+  { file: 'audit_logs_schema.sql',        label: 'Admin Web audit logs' },
+  { file: 'production_indexes.sql',       label: 'Production hardening indexes' },
+  { file: 'notifications_admin_recipient.sql', label: 'Notifications admin_id recipient (Admin Web staff)' },
+  { file: 'drop_users_is_admin.sql',          label: 'Drop legacy users.is_admin column' },
 ];
 
 const REQUIRED_TABLES = [
@@ -48,13 +57,15 @@ const REQUIRED_TABLES = [
   'spec_definitions',
   'model_spec_values',
   'notifications',
-  'ads',
   'banners',
   'cities',
   'areas',
   'favorites',
   'listing_views',
   'offers',
+  'admins',
+  'settings',
+  'audit_logs',
 ];
 
 const REQUIRED_LISTING_COLUMNS = [
@@ -65,6 +76,7 @@ const REQUIRED_LISTING_COLUMNS = [
   'city_id',
   'area_id',
   'views',
+  'decline_reason',
 ];
 
 const DATABASE_DIR = path.join(__dirname, '../database');

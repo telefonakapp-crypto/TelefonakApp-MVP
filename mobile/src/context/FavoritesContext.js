@@ -1,6 +1,8 @@
 import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
+import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import apiClient from '../utils/api';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
 
 const FavoritesContext = createContext(null);
 
@@ -104,8 +106,12 @@ export const FavoritesProvider = ({ children }) => {
           return false;
         }
 
-        console.error('Error toggling favorite:', error);
+        logApiError('FavoritesContext.toggleFavorite', error);
         setFavoriteState(listingId, wasFavorite);
+        Alert.alert(
+          'Error',
+          getApiErrorMessage(error, "We couldn't update your saved listings. Please try again.")
+        );
         return wasFavorite;
       } finally {
         markPending(listingId, false);

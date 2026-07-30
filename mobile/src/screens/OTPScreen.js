@@ -13,7 +13,8 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, CommonActions } from '@react-navigation/native';
-import apiClient, { API_BASE_URL } from '../utils/api';
+import apiClient from '../utils/api';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -72,31 +73,24 @@ export default function OTPScreen() {
       });
 
       if (response.data) {
-        if (isSignUp) {
-          // Sign up flow - always go to registration
+        // New users finish registration; existing users (login or signup) go Home.
+        if (response.data.isNewUser) {
           navigation.replace('Register', { token: response.data.token });
         } else {
-          // Login flow - check if user is new or existing
-          if (response.data.isNewUser) {
-            // This shouldn't happen in login flow, but handle it
-            navigation.replace('Register', { token: response.data.token });
-          } else {
-            // Existing user - save token and go directly to Home
-            await AsyncStorage.setItem('authToken', response.data.token);
-            // Reset navigation stack to prevent going back to OTP/Login
-            navigation.dispatch(
-              CommonActions.reset({
-                index: 0,
-                routes: [{ name: 'Home' }],
-              })
-            );
-          }
+          await AsyncStorage.setItem('authToken', response.data.token);
+          navigation.dispatch(
+            CommonActions.reset({
+              index: 0,
+              routes: [{ name: 'Home' }],
+            })
+          );
         }
       }
     } catch (error) {
+      logApiError('OTPScreen.verifyOTP', error);
       Alert.alert(
         'Error',
-        error.response?.data?.error || 'Invalid OTP. Please try again.'
+        getApiErrorMessage(error, 'Invalid OTP. Please try again.')
       );
       setOtp('');
     } finally {
@@ -122,11 +116,15 @@ export default function OTPScreen() {
       }
     } catch (error) {
       // A refused resend tells us exactly how long the server wants us to wait.
+      logApiError('OTPScreen.resendOTP', error);
       const retryAfter = error.response?.data?.retry_after_seconds;
       if (retryAfter) {
         setTimer(retryAfter);
       }
-      Alert.alert('Error', error.response?.data?.error || 'Failed to resend OTP. Please try again.');
+      Alert.alert(
+        'Error',
+        getApiErrorMessage(error, 'Failed to resend OTP. Please try again.')
+      );
     } finally {
       setLoading(false);
     }

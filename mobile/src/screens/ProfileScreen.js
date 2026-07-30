@@ -18,8 +18,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { useFavorites } from '../context/FavoritesContext';
 import { useNotifications } from '../context/NotificationsContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
-
-const API_BASE_URL = 'http://localhost:3000/api';
+import { API_BASE_URL } from '../utils/api';
 
 export default function ProfileScreen() {
   const navigation = useNavigation();
@@ -78,7 +77,7 @@ export default function ProfileScreen() {
               clearUnreadCount();
               navigation.reset({
                 index: 0,
-                routes: [{ name: 'Login' }],
+                routes: [{ name: 'AuthChoice' }],
               });
             } catch (error) {
               console.error('Logout error:', error);

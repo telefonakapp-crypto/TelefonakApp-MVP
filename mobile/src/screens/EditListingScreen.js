@@ -22,13 +22,18 @@ import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import { useModelOptions } from '../hooks/useModelOptions';
 import { filterMvpCategories, localizedCategoryName } from '../utils/mvpCategories';
+import {
+  LISTING_IMAGE_PICKER_OPTIONS,
+  normalizeListingImageAsset,
+  appendListingImagesToFormData,
+} from '../utils/listingImages';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
+import { API_BASE_URL, resolveMediaUrl } from '../utils/api';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const ITEM_HEIGHT = 50;
 const VISIBLE_ITEMS = 5;
 const MAX_IMAGES = 10;
-
-const API_BASE_URL = 'http://localhost:3000/api';
 
 const isRemoteImageUri = (uri) =>
   typeof uri === 'string' && (uri.startsWith('http://') || uri.startsWith('https://'));
@@ -216,7 +221,7 @@ export default function EditListingScreen() {
           }
         }
         const existingImages = (listingRes.data.images || [])
-          .map((img) => img.image_url)
+          .map((img) => resolveMediaUrl(img.image_url))
           .filter(Boolean);
         setImages(existingImages);
 
@@ -381,16 +386,15 @@ export default function EditListingScreen() {
     if (!hasPermission) return;
 
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: true,
-        quality: 0.8,
-        allowsEditing: false,
-      });
+      const result = await ImagePicker.launchImageLibraryAsync(LISTING_IMAGE_PICKER_OPTIONS);
 
       if (!result.canceled && result.assets) {
-        const newImages = result.assets.map(asset => asset.uri);
-        setImages(prev => [...prev, ...newImages].slice(0, MAX_IMAGES));
+        const normalized = [];
+        for (let i = 0; i < result.assets.length; i += 1) {
+          const part = await normalizeListingImageAsset(result.assets[i], i);
+          normalized.push(part.uri);
+        }
+        setImages(prev => [...prev, ...normalized].slice(0, MAX_IMAGES));
       }
     } catch (error) {
       console.error('Error picking image:', error);
@@ -459,6 +463,16 @@ export default function EditListingScreen() {
       return;
     }
 
+    const priceValue = Number(formData.price);
+    if (!Number.isFinite(priceValue) || priceValue < 0.01) {
+      Alert.alert('Error', 'Please enter a valid price greater than 0');
+      scrollToField('price');
+      setTimeout(() => {
+        priceInputRef.current?.focus();
+      }, 300);
+      return;
+    }
+
     if (!formData.city_id) {
       Alert.alert('Error', 'Please select a city');
       scrollToField('location');
@@ -481,18 +495,7 @@ export default function EditListingScreen() {
       let uploadedUrls = [];
       if (newLocalUris.length > 0) {
         const uploadFormData = new FormData();
-        newLocalUris.forEach((uri, index) => {
-          const fileName = uri.split('/').pop() || `photo_${index}.jpg`;
-          const extMatch = /\.(\w+)$/.exec(fileName);
-          const ext = extMatch ? extMatch[1].toLowerCase() : 'jpg';
-          const mimeType =
-            ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
-          uploadFormData.append('images', {
-            uri,
-            name: fileName,
-            type: mimeType,
-          });
-        });
+        await appendListingImagesToFormData(uploadFormData, newLocalUris);
 
         const uploadResponse = await axios.post(
           `${API_BASE_URL}/upload/listing-images`,
@@ -512,7 +515,7 @@ export default function EditListingScreen() {
       // Rebuild by walking the images array and replacing locals with uploaded URLs in order.
       let uploadIndex = 0;
       const finalImageUrls = images.map((uri) => {
-        if (isRemoteImageUri(uri)) return uri;
+        if (isRemoteImageUri(uri)) return resolveMediaUrl(uri);
         const uploaded = uploadedUrls[uploadIndex];
         uploadIndex += 1;
         return uploaded;
@@ -545,9 +548,10 @@ export default function EditListingScreen() {
       ]);
     } catch (error) {
       console.error('Error updating listing:', error);
+      logApiError('EditListingScreen.updateListing', error);
       Alert.alert(
-        'Error',
-        error.response?.data?.error || t('editListing.updateFailed')
+        t('common.error'),
+        getApiErrorMessage(error, t('editListing.updateFailed'))
       );
     } finally {
       setLoading(false);
@@ -1189,7 +1193,7 @@ export default function EditListingScreen() {
             >
               {images.map((uri, index) => (
                 <View key={`${uri}-${index}`} style={[styles.imageContainer, { marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }]}>
-                  <Image source={{ uri }} style={[styles.imagePreview, { backgroundColor: colors.inputBackground }]} />
+                  <Image source={{ uri: resolveMediaUrl(uri) }} style={[styles.imagePreview, { backgroundColor: colors.inputBackground }]} />
                   <TouchableOpacity
                     style={[styles.removeImageButton, { backgroundColor: colors.surface }, { right: isRTL ? 'auto' : -8, left: isRTL ? -8 : 'auto' }]}
                     onPress={() => removeImage(index)}

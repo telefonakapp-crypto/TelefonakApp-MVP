@@ -16,7 +16,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { Linking } from 'react-native';
-import apiClient from '../utils/api';
+import apiClient, { resolveMediaUrl } from '../utils/api';
+import { getApiErrorMessage, logApiError } from '../utils/apiError';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
@@ -96,8 +97,11 @@ export default function ListingDetailsScreen() {
       setListing((prev) => (prev ? { ...prev, ...response.data.listing } : prev));
       Alert.alert(t('common.success'), t('myListings.unhiddenSuccess'));
     } catch (error) {
-      console.error('Error unhiding listing:', error.response?.data || error.message);
-      Alert.alert(t('common.error'), error.response?.data?.error || t('myListings.visibilityFailed'));
+      logApiError('ListingDetailsScreen.unhideListing', error);
+      Alert.alert(
+        t('common.error'),
+        getApiErrorMessage(error, t('myListings.visibilityFailed'))
+      );
     } finally {
       setUpdatingVisibility(false);
     }
@@ -129,8 +133,11 @@ export default function ListingDetailsScreen() {
         response.data.updated ? t('offers.offerUpdated') : t('offers.offerSubmitted')
       );
     } catch (error) {
-      console.error('Error submitting offer:', error.response?.data || error.message);
-      Alert.alert(t('common.error'), error.response?.data?.error || t('offers.submitFailed'));
+      logApiError('ListingDetailsScreen.submitOffer', error);
+      Alert.alert(
+        t('common.error'),
+        getApiErrorMessage(error, t('offers.submitFailed'))
+      );
     } finally {
       setSubmittingOffer(false);
     }
@@ -190,7 +197,7 @@ export default function ListingDetailsScreen() {
                   }}
                 >
                   <Image
-                    source={{ uri: image.image_url }}
+                    source={{ uri: resolveMediaUrl(image.image_url) }}
                     style={styles.listingImage}
                     resizeMode="cover"
                   />
@@ -512,7 +519,7 @@ export default function ListingDetailsScreen() {
                   }}
                 >
                   <Image
-                    source={{ uri: image.image_url }}
+                    source={{ uri: resolveMediaUrl(image.image_url) }}
                     style={styles.modalImage}
                     resizeMode="contain"
                   />

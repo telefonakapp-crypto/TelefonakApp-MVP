@@ -2,7 +2,9 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
 const { body, validationResult } = require('express-validator');
+const jwt = require('jsonwebtoken');
 const verifyToken = require('../middleware/verifyToken');
+const { getJwtSecret } = require('../config/env');
 
 // Register/Update user
 router.post('/register', verifyToken,
@@ -32,6 +34,12 @@ router.post('/register', verifyToken,
       const existingUser = await pool.query('SELECT * FROM users WHERE phone_number = $1', [phoneNumber]);
 
       if (existingUser.rows.length > 0) {
+        if (existingUser.rows[0].is_active === false) {
+          return res.status(403).json({
+            error: 'Account is disabled. Please contact support.',
+          });
+        }
+
         // Update existing user
         const result = await pool.query(
           `UPDATE users 
@@ -42,10 +50,9 @@ router.post('/register', verifyToken,
           [first_name, last_name, gender, email, date_of_birth, city, phoneNumber]
         );
 
-        const jwt = require('jsonwebtoken');
         const token = jwt.sign(
           { userId: result.rows[0].id, phoneNumber: result.rows[0].phone_number },
-          process.env.JWT_SECRET || 'your-secret-key',
+          getJwtSecret(),
           { expiresIn: '30d' }
         );
 
@@ -63,10 +70,9 @@ router.post('/register', verifyToken,
           [phoneNumber, first_name, last_name, gender, email, date_of_birth, city]
         );
 
-        const jwt = require('jsonwebtoken');
         const token = jwt.sign(
           { userId: result.rows[0].id, phoneNumber: result.rows[0].phone_number },
-          process.env.JWT_SECRET || 'your-secret-key',
+          getJwtSecret(),
           { expiresIn: '30d' }
         );
 

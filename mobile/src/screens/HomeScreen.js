@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  FlatList,
   TextInput,
   Image,
   ActivityIndicator,
@@ -21,7 +22,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect, CommonActions } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import apiClient, { API_BASE_URL } from '../utils/api';
+import apiClient, { resolveMediaUrl } from '../utils/api';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
@@ -40,6 +41,8 @@ import { useNotifications } from '../context/NotificationsContext';
 import FavoriteButton from '../components/FavoriteButton';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+const MARKETPLACE_PAGE_SIZE = 20;
 
 export default function HomeScreen() {
   const navigation = useNavigation();
@@ -75,7 +78,6 @@ export default function HomeScreen() {
   const sortScrollRef = useRef(null);
   const brandScrollRef = useRef(null);
   const [imageErrors, setImageErrors] = useState({});
-  const [isAdmin, setIsAdmin] = useState(false);
   const [userName, setUserName] = useState('');
   const [showMenu, setShowMenu] = useState(false);
   const menuSlideAnim = useRef(new Animated.Value(isRTL ? -SCREEN_WIDTH : SCREEN_WIDTH)).current;
@@ -87,8 +89,14 @@ export default function HomeScreen() {
   const isScrollingRef = useRef(false);
   const pendingResetRef = useRef(false);
   
-  // Filter state
+  // Filter state (applied). Modal edits draftFilters until Apply/Cancel.
   const [filters, setFilters] = useState({ ...EMPTY_MARKETPLACE_FILTERS });
+  const [draftFilters, setDraftFilters] = useState({ ...EMPTY_MARKETPLACE_FILTERS });
+  const [hasMoreListings, setHasMoreListings] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const listingsRequestIdRef = useRef(0);
+  const listingsAbortRef = useRef(null);
+
 
   // Brand logo mapping - using Google Favicons API only
   const getBrandLogo = (brandName) => {
@@ -120,6 +128,23 @@ export default function HomeScreen() {
     return `https://www.google.com/s2/favicons?domain=${brandLower}.com&sz=128`;
   };
 
+  const fetchUserProfile = useCallback(async () => {
+    try {
+      const response = await apiClient.get('/user/profile');
+      if (response.data.user) {
+        const firstName = response.data.user.first_name || '';
+        const lastName = response.data.user.last_name || '';
+        const fullName = `${firstName} ${lastName}`.trim();
+        setUserName(fullName || 'User');
+      } else {
+        setUserName('User');
+      }
+    } catch (error) {
+      console.error('Error fetching user profile:', error);
+      setUserName('User');
+    }
+  }, []);
+
   const handleCloseMenu = useCallback(() => {
     // Animate menu sliding out (to right in LTR, to left in RTL)
     Animated.timing(menuSlideAnim, {
@@ -131,28 +156,9 @@ export default function HomeScreen() {
       // Reset animation value for next open
       menuSlideAnim.setValue(isRTL ? -SCREEN_WIDTH : SCREEN_WIDTH);
       // Refresh user name when menu closes (in case profile was edited)
-      fetchAdminStatus();
+      fetchUserProfile();
     });
-  }, [menuSlideAnim, fetchAdminStatus, isRTL]);
-
-  const fetchAdminStatus = useCallback(async () => {
-    try {
-      const response = await apiClient.get('/user/profile');
-      setIsAdmin(response.data.user?.is_admin === true);
-      if (response.data.user) {
-        const firstName = response.data.user.first_name || '';
-        const lastName = response.data.user.last_name || '';
-        const fullName = `${firstName} ${lastName}`.trim();
-        setUserName(fullName || 'User');
-      } else {
-        setUserName('User');
-      }
-    } catch (error) {
-      console.error('Error fetching admin status:', error);
-      setIsAdmin(false);
-      setUserName('User');
-    }
-  }, []);
+  }, [menuSlideAnim, fetchUserProfile, isRTL]);
 
   const fetchBanners = useCallback(async () => {
     try {
@@ -194,27 +200,27 @@ export default function HomeScreen() {
   useEffect(() => {
     fetchFilterData();
     refreshUnreadCount();
-    fetchAdminStatus();
+    fetchUserProfile();
     fetchBanners();
     // Cached in FavoritesContext, so this only hits the API once per session.
     loadFavorites();
-  }, [refreshUnreadCount, fetchAdminStatus, fetchBanners, loadFavorites]);
+  }, [refreshUnreadCount, fetchUserProfile, fetchBanners, loadFavorites]);
 
   useFocusEffect(
     useCallback(() => {
       refreshUnreadCount();
-      fetchAdminStatus();
+      fetchUserProfile();
       fetchBanners();
-    }, [refreshUnreadCount, fetchAdminStatus, fetchBanners])
+    }, [refreshUnreadCount, fetchUserProfile, fetchBanners])
   );
 
   // Refresh user name when screen comes into focus (e.g., after editing profile)
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
-      fetchAdminStatus();
+      fetchUserProfile();
     });
     return unsubscribe;
-  }, [navigation, fetchAdminStatus]);
+  }, [navigation, fetchUserProfile]);
 
   // Auto-scroll banners if there are multiple
   useEffect(() => {
@@ -344,7 +350,7 @@ export default function HomeScreen() {
     } catch (e) {
       // keep existing filterBrands
     }
-    setFilters(prev => ({
+    setDraftFilters(prev => ({
       ...prev,
       category_id: cat_id,
       brand_id: '',
@@ -360,8 +366,8 @@ export default function HomeScreen() {
   };
 
   const handleSelectBrand = async (brand_id) => {
-    const currentCategoryId = filters.category_id;
-    setFilters(prev => ({
+    const currentCategoryId = draftFilters.category_id;
+    setDraftFilters(prev => ({
       ...prev,
       brand_id,
       model_id: '',
@@ -385,7 +391,7 @@ export default function HomeScreen() {
   };
 
   const handleSelectModel = async (model_id) => {
-    setFilters(prev => ({
+    setDraftFilters(prev => ({
       ...prev,
       model_id,
       model_storage_id: '',
@@ -408,7 +414,7 @@ export default function HomeScreen() {
   };
 
   const handleSelectCity = async (city_id) => {
-    setFilters(prev => ({ ...prev, city_id, area_id: '' }));
+    setDraftFilters(prev => ({ ...prev, city_id, area_id: '' }));
     setAreas([]);
     if (city_id) {
       try {
@@ -420,20 +426,68 @@ export default function HomeScreen() {
     }
   };
 
-  const fetchListings = React.useCallback(async (search = '', appliedFilters = {}) => {
+  const fetchListings = React.useCallback(async (
+    search = '',
+    appliedFilters = {},
+    { offset = 0, append = false } = {}
+  ) => {
+    if (listingsAbortRef.current) {
+      listingsAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    listingsAbortRef.current = controller;
+    const requestId = ++listingsRequestIdRef.current;
+
     try {
-      const params = buildMarketplaceListingParams(appliedFilters, { search, limit: 20 });
-      const response = await apiClient.get(`/listings?${params.toString()}`);
+      const params = buildMarketplaceListingParams(appliedFilters, {
+        search,
+        limit: MARKETPLACE_PAGE_SIZE,
+        offset,
+      });
+      const response = await apiClient.get(`/listings?${params.toString()}`, {
+        signal: controller.signal,
+      });
+
+      // Ignore stale responses (race between search/filter pages).
+      if (requestId !== listingsRequestIdRef.current) {
+        return [];
+      }
+
       const fetchedListings = response.data.listings || [];
-      setListings(fetchedListings);
+      setListings((prev) => {
+        if (!append) return fetchedListings;
+        const seen = new Set(prev.map((item) => item.id));
+        const merged = [...prev];
+        fetchedListings.forEach((item) => {
+          if (!seen.has(item.id)) {
+            seen.add(item.id);
+            merged.push(item);
+          }
+        });
+        return merged;
+      });
+      setHasMoreListings(fetchedListings.length >= MARKETPLACE_PAGE_SIZE);
       return fetchedListings;
     } catch (error) {
+      if (
+        error?.code === 'ERR_CANCELED' ||
+        error?.name === 'CanceledError' ||
+        error?.name === 'AbortError'
+      ) {
+        return [];
+      }
       console.error('Error fetching listings:', error);
-      setListings([]);
+      if (requestId === listingsRequestIdRef.current && !append) {
+        setListings([]);
+        setHasMoreListings(false);
+      }
       return [];
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (requestId === listingsRequestIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+        setLoadingMore(false);
+      }
     }
   }, []);
 
@@ -447,19 +501,32 @@ export default function HomeScreen() {
 
   useEffect(() => {
     setLoading(true);
-    fetchListings(debouncedSearchQuery, filters);
+    setHasMoreListings(true);
+    fetchListings(debouncedSearchQuery, filters, { offset: 0, append: false });
   }, [fetchListings, debouncedSearchQuery, filters]);
 
   useFocusEffect(
     React.useCallback(() => {
-      fetchListings(debouncedSearchQuery, filters);
+      fetchListings(debouncedSearchQuery, filters, { offset: 0, append: false });
     }, [fetchListings, debouncedSearchQuery, filters])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
-    fetchListings(debouncedSearchQuery, filters);
+    setHasMoreListings(true);
+    fetchListings(debouncedSearchQuery, filters, { offset: 0, append: false });
     fetchBanners();
+  };
+
+  const handleLoadMoreListings = () => {
+    if (loading || loadingMore || refreshing || !hasMoreListings || listings.length === 0) {
+      return;
+    }
+    setLoadingMore(true);
+    fetchListings(debouncedSearchQuery, filters, {
+      offset: listings.length,
+      append: true,
+    });
   };
 
   const handleSearchChange = (text) => {
@@ -489,27 +556,81 @@ export default function HomeScreen() {
 
   const getActiveFiltersCount = () => countActiveMarketplaceFilters(filters);
 
+  const hydrateDraftFilterOptions = async (nextFilters) => {
+    try {
+      if (nextFilters.category_id) {
+        const res = await apiClient.get(`/brands?category_id=${nextFilters.category_id}`);
+        setFilterBrands(sortBrands(res.data.brands || []));
+      }
+      if (nextFilters.brand_id) {
+        const url = nextFilters.category_id
+          ? `/brands/${nextFilters.brand_id}/models?category_id=${nextFilters.category_id}`
+          : `/brands/${nextFilters.brand_id}/models`;
+        const res = await apiClient.get(url);
+        setFilterModels(res.data.models || []);
+      } else {
+        setFilterModels([]);
+      }
+      if (nextFilters.model_id) {
+        const [storagesRes, colorsRes] = await Promise.all([
+          apiClient.get(`/models/${nextFilters.model_id}/storages`),
+          apiClient.get(`/models/${nextFilters.model_id}/colors`),
+        ]);
+        setModelStorages(storagesRes.data.storages || storagesRes.data || []);
+        setModelColors(colorsRes.data.colors || colorsRes.data || []);
+      } else {
+        setModelStorages([]);
+        setModelColors([]);
+      }
+      if (nextFilters.city_id) {
+        const res = await apiClient.get(`/cities/${nextFilters.city_id}/areas`);
+        setAreas(res.data.areas || []);
+      } else {
+        setAreas([]);
+      }
+    } catch (e) {
+      // Draft UI can still open; options may be empty until reselected.
+    }
+  };
+
+  const openFilterModal = () => {
+    const next = { ...filters };
+    setDraftFilters(next);
+    hydrateDraftFilterOptions(next);
+    setShowFilterModal(true);
+  };
+
+  const handleCancelFilters = () => {
+    setShowFilterModal(false);
+  };
+
   const handleApplyFilters = () => {
-    const error = validateMarketplaceFilters(filters);
+    const error = validateMarketplaceFilters(draftFilters);
     if (error) {
       Alert.alert('Error', error);
       return;
     }
+    setFilters({ ...draftFilters });
     setShowFilterModal(false);
-    setLoading(true);
-    fetchListings(debouncedSearchQuery, filters);
+  };
+
+  const handleClearDraftFilters = () => {
+    setDraftFilters({ ...EMPTY_MARKETPLACE_FILTERS });
+    setFilterModels([]);
+    setModelStorages([]);
+    setModelColors([]);
+    setAreas([]);
   };
 
   const handleClearFilters = () => {
     const cleared = { ...EMPTY_MARKETPLACE_FILTERS };
     setFilters(cleared);
+    setDraftFilters(cleared);
     setFilterModels([]);
     setModelStorages([]);
     setModelColors([]);
     setAreas([]);
     setShowFilterModal(false);
-    setLoading(true);
-    fetchListings(debouncedSearchQuery, cleared);
   };
 
   const handleListingPress = (listingId) => {
@@ -543,11 +664,11 @@ export default function HomeScreen() {
               clearFavorites();
               clearUnreadCount();
               
-              // Reset navigation to Login screen
+              // Reset navigation to AuthChoice so users can Login or Sign Up
               navigation.dispatch(
                 CommonActions.reset({
                   index: 0,
-                  routes: [{ name: 'Login' }],
+                  routes: [{ name: 'AuthChoice' }],
                 })
               );
             } catch (error) {
@@ -612,7 +733,7 @@ export default function HomeScreen() {
                   borderColor: getActiveFiltersCount() > 0 ? colors.primary : colors.inputBorder,
                 },
               ]}
-              onPress={() => setShowFilterModal(true)}
+              onPress={openFilterModal}
               accessibilityRole="button"
               accessibilityLabel={t('home.filterTitle')}
             >
@@ -651,15 +772,22 @@ export default function HomeScreen() {
           )}
         </View>
 
-        {/* Scrollable Content */}
-        <ScrollView 
+        {/* Scrollable marketplace: banners/brands header + paginated listings */}
+        <FlatList
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
+          data={listings}
+          keyExtractor={(item) => String(item.id)}
+          numColumns={2}
+          columnWrapperStyle={styles.listingsRow}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
-        >
+          onEndReached={handleLoadMoreListings}
+          onEndReachedThreshold={0.5}
+          ListHeaderComponent={
+            <>
           {/* Marketing Banners */}
           {banners.length > 0 && (
             <View style={styles.adsSection}>
@@ -693,7 +821,7 @@ export default function HomeScreen() {
                           disabled={!banner.action_type || banner.action_type === 'none'}
                         >
                           <Image
-                            source={{ uri: banner.image_url }}
+                            source={{ uri: resolveMediaUrl(banner.image_url) }}
                             style={styles.adImage}
                             resizeMode="cover"
                           />
@@ -734,7 +862,7 @@ export default function HomeScreen() {
           <View style={styles.section}>
             <View style={[styles.sectionHeader, getFlexDirection(isRTL, 'row')]}>
               <Text style={[styles.sectionTitle, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('home.brands')}</Text>
-              <TouchableOpacity onPress={() => setShowFilterModal(true)}>
+              <TouchableOpacity onPress={openFilterModal}>
                 <Text style={[styles.seeAllText, { color: colors.primary }, getTextAlign(isRTL, 'auto')]}>{t('home.seeAll')}</Text>
               </TouchableOpacity>
             </View>
@@ -761,8 +889,6 @@ export default function HomeScreen() {
                     setFilterModels([]);
                     setModelStorages([]);
                     setModelColors([]);
-                    setLoading(true);
-                    fetchListings(debouncedSearchQuery, newFilters);
                   }}
                 >
                   <View style={[
@@ -816,14 +942,20 @@ export default function HomeScreen() {
           </View>
 
 
+
           {/* Fresh Arrivals */}
           <View style={styles.section}>
             <Text style={[styles.sectionTitle, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('home.freshArrivals')}</Text>
-            {loading ? (
+            {loading && listings.length === 0 ? (
               <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={colors.primary} />
               </View>
-            ) : listings.length === 0 ? (
+            ) : null}
+          </View>
+            </>
+          }
+          ListEmptyComponent={
+            !loading ? (
               <View style={styles.emptyContainer}>
                 <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
                   {getListingsEmptyMessage()}
@@ -842,60 +974,63 @@ export default function HomeScreen() {
                   </TouchableOpacity>
                 )}
               </View>
-            ) : (
-              <View style={styles.grid}>
-                {listings.map((listing) => (
-                  <TouchableOpacity
-                    key={listing.id}
-                    style={[styles.card, { backgroundColor: colors.surface }]}
-                    onPress={() => handleListingPress(listing.id)}
-                  >
-                    <View style={styles.cardImageContainer}>
-                      {listing.thumbnail_image ? (
-                        <Image
-                          source={{ uri: listing.thumbnail_image }}
-                          style={styles.cardImage}
-                          resizeMode="cover"
-                        />
-                      ) : (
-                        <View style={[styles.cardImage, { backgroundColor: colors.borderLight }]} />
-                      )}
-                      <FavoriteButton listingId={listing.id} />
-                      <View style={[styles.conditionBadge, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.9)' : 'rgba(0, 0, 0, 0.6)' }]}>
-                        <Text style={[styles.conditionText, { color: isDarkMode ? '#09090b' : '#ffffff' }]}>
-                          {(() => {
-                            const conditionKey = listing.condition_name?.toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
-                            const conditionMap = {
-                              'new': t('conditions.new'),
-                              'likenew': t('conditions.likeNew'),
-                              'usedlikenew': t('conditions.usedlikenew'),
-                              'usedgood': t('conditions.usedgood'),
-                              'usedfair': t('conditions.usedfair'),
-                              'excellent': t('conditions.excellent'),
-                              'verygood': t('conditions.veryGood'),
-                              'good': t('conditions.good'),
-                              'fair': t('conditions.fair'),
-                              'poor': t('conditions.poor'),
-                              'used': t('conditions.used'),
-                              'refurbished': t('conditions.refurbished'),
-                            };
-                            return conditionMap[conditionKey] || listing.condition_name || '';
-                          })()}
-                        </Text>
-                      </View>
-                    </View>
-                    <View style={styles.cardContent}>
-                      <Text style={[styles.cardTitle, { color: colors.text }]} numberOfLines={1}>
-                        {listing.brand_name} {listing.model_name}
-                      </Text>
-                      <Text style={[styles.cardPrice, { color: colors.primary }]}>{listing.price} JOD</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
+            ) : null
+          }
+          ListFooterComponent={
+            loadingMore ? (
+              <View style={styles.loadingMoreContainer}>
+                <ActivityIndicator size="small" color={colors.primary} />
               </View>
-            )}
-          </View>
-        </ScrollView>
+            ) : null
+          }
+          renderItem={({ item: listing }) => (
+            <TouchableOpacity
+              style={[styles.card, { backgroundColor: colors.surface }]}
+              onPress={() => handleListingPress(listing.id)}
+            >
+              <View style={styles.cardImageContainer}>
+                {listing.thumbnail_image ? (
+                  <Image
+                    source={{ uri: resolveMediaUrl(listing.thumbnail_image) }}
+                    style={styles.cardImage}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={[styles.cardImage, { backgroundColor: colors.borderLight }]} />
+                )}
+                <FavoriteButton listingId={listing.id} />
+                <View style={[styles.conditionBadge, { backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.9)' : 'rgba(0, 0, 0, 0.6)' }]}>
+                  <Text style={[styles.conditionText, { color: isDarkMode ? '#09090b' : '#ffffff' }]}>
+                    {(() => {
+                      const conditionKey = listing.condition_name?.toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
+                      const conditionMap = {
+                        'new': t('conditions.new'),
+                        'likenew': t('conditions.likeNew'),
+                        'usedlikenew': t('conditions.usedlikenew'),
+                        'usedgood': t('conditions.usedgood'),
+                        'usedfair': t('conditions.usedfair'),
+                        'excellent': t('conditions.excellent'),
+                        'verygood': t('conditions.veryGood'),
+                        'good': t('conditions.good'),
+                        'fair': t('conditions.fair'),
+                        'poor': t('conditions.poor'),
+                        'used': t('conditions.used'),
+                        'refurbished': t('conditions.refurbished'),
+                      };
+                      return conditionMap[conditionKey] || listing.condition_name || '';
+                    })()}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.cardContent}>
+                <Text style={[styles.cardTitle, { color: colors.text }]} numberOfLines={1}>
+                  {listing.brand_name} {listing.model_name}
+                </Text>
+                <Text style={[styles.cardPrice, { color: colors.primary }]}>{listing.price} JOD</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+        />
 
         {/* Bottom Nav */}
         <View style={[styles.bottomNav, { backgroundColor: colors.surface, borderTopColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}>
@@ -905,10 +1040,10 @@ export default function HomeScreen() {
           </TouchableOpacity>
           <TouchableOpacity 
             style={styles.navItem}
-            onPress={() => navigation.navigate('MyListings', { isAdmin })}
+            onPress={() => navigation.navigate('MyListings')}
           >
             <Ionicons name="list-outline" size={24} color={colors.textSecondary} />
-            <Text style={[styles.navLabel, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>{isAdmin ? t('home.allListings') : t('home.myListings')}</Text>
+            <Text style={[styles.navLabel, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>{t('home.myListings')}</Text>
           </TouchableOpacity>
           <View style={styles.addButtonContainer}>
             <TouchableOpacity style={[styles.addButton, { backgroundColor: colors.primary }]} onPress={handleCreateListing}>
@@ -947,7 +1082,7 @@ export default function HomeScreen() {
         visible={showFilterModal}
         animationType="slide"
         transparent={true}
-        onRequestClose={() => setShowFilterModal(false)}
+        onRequestClose={handleCancelFilters}
         onShow={() => {
           if (isRTL) {
             requestAnimationFrame(() => {
@@ -967,7 +1102,7 @@ export default function HomeScreen() {
           <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
             <View style={[styles.modalHeader, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}>
               <Text style={[styles.modalTitle, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('home.filterTitle')}</Text>
-              <TouchableOpacity onPress={() => setShowFilterModal(false)}>
+              <TouchableOpacity onPress={handleCancelFilters}>
                 <Ionicons name="close" size={24} color={colors.text} />
               </TouchableOpacity>
             </View>
@@ -996,13 +1131,13 @@ export default function HomeScreen() {
                           key={cat.id}
                           style={[
                             styles.filterChip,
-                            { backgroundColor: filters.category_id === cat.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.category_id === cat.id.toString() && styles.filterChipActive,
+                            { backgroundColor: draftFilters.category_id === cat.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            draftFilters.category_id === cat.id.toString() && styles.filterChipActive,
                             { marginRight: 0, marginLeft: 8 },
                           ]}
                           onPress={() => handleSelectCategory(cat.id.toString())}
                         >
-                          <Text style={[styles.filterChipText, { color: filters.category_id === cat.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          <Text style={[styles.filterChipText, { color: draftFilters.category_id === cat.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {language === 'ar' ? (cat.name_ar || cat.name_en || cat.name) : (cat.name_en || cat.name)}
                           </Text>
                         </TouchableOpacity>
@@ -1010,13 +1145,13 @@ export default function HomeScreen() {
                       <TouchableOpacity
                         style={[
                           styles.filterChip,
-                          { backgroundColor: filters.category_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.category_id === '' && styles.filterChipActive,
+                          { backgroundColor: draftFilters.category_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          draftFilters.category_id === '' && styles.filterChipActive,
                           { marginRight: 0, marginLeft: 8 },
                         ]}
                         onPress={() => handleSelectCategory('')}
                       >
-                        <Text style={[styles.filterChipText, { color: filters.category_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                        <Text style={[styles.filterChipText, { color: draftFilters.category_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
                         </Text>
                       </TouchableOpacity>
@@ -1026,12 +1161,12 @@ export default function HomeScreen() {
                       <TouchableOpacity
                         style={[
                           styles.filterChip,
-                          { backgroundColor: filters.category_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.category_id === '' && styles.filterChipActive,
+                          { backgroundColor: draftFilters.category_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          draftFilters.category_id === '' && styles.filterChipActive,
                         ]}
                         onPress={() => handleSelectCategory('')}
                       >
-                        <Text style={[styles.filterChipText, { color: filters.category_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                        <Text style={[styles.filterChipText, { color: draftFilters.category_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
                         </Text>
                       </TouchableOpacity>
@@ -1040,12 +1175,12 @@ export default function HomeScreen() {
                           key={cat.id}
                           style={[
                             styles.filterChip,
-                            { backgroundColor: filters.category_id === cat.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.category_id === cat.id.toString() && styles.filterChipActive,
+                            { backgroundColor: draftFilters.category_id === cat.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            draftFilters.category_id === cat.id.toString() && styles.filterChipActive,
                           ]}
                           onPress={() => handleSelectCategory(cat.id.toString())}
                         >
-                          <Text style={[styles.filterChipText, { color: filters.category_id === cat.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          <Text style={[styles.filterChipText, { color: draftFilters.category_id === cat.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {language === 'ar' ? (cat.name_ar || cat.name_en || cat.name) : (cat.name_en || cat.name)}
                           </Text>
                         </TouchableOpacity>
@@ -1076,13 +1211,13 @@ export default function HomeScreen() {
                           key={brand.id}
                           style={[
                             styles.filterChip,
-                            { backgroundColor: filters.brand_id === brand.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.brand_id === brand.id.toString() && styles.filterChipActive,
+                            { backgroundColor: draftFilters.brand_id === brand.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            draftFilters.brand_id === brand.id.toString() && styles.filterChipActive,
                             { marginRight: 0, marginLeft: 8 },
                           ]}
                           onPress={() => handleSelectBrand(brand.id.toString())}
                         >
-                          <Text style={[styles.filterChipText, { color: filters.brand_id === brand.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          <Text style={[styles.filterChipText, { color: draftFilters.brand_id === brand.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {brand.name}
                           </Text>
                         </TouchableOpacity>
@@ -1090,13 +1225,13 @@ export default function HomeScreen() {
                       <TouchableOpacity
                         style={[
                           styles.filterChip,
-                          { backgroundColor: filters.brand_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.brand_id === '' && styles.filterChipActive,
+                          { backgroundColor: draftFilters.brand_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          draftFilters.brand_id === '' && styles.filterChipActive,
                           { marginRight: 0, marginLeft: 8 },
                         ]}
                         onPress={() => handleSelectBrand('')}
                       >
-                        <Text style={[styles.filterChipText, { color: filters.brand_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                        <Text style={[styles.filterChipText, { color: draftFilters.brand_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
                         </Text>
                       </TouchableOpacity>
@@ -1106,12 +1241,12 @@ export default function HomeScreen() {
                       <TouchableOpacity
                         style={[
                           styles.filterChip,
-                          { backgroundColor: filters.brand_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.brand_id === '' && styles.filterChipActive,
+                          { backgroundColor: draftFilters.brand_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          draftFilters.brand_id === '' && styles.filterChipActive,
                         ]}
                         onPress={() => handleSelectBrand('')}
                       >
-                        <Text style={[styles.filterChipText, { color: filters.brand_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                        <Text style={[styles.filterChipText, { color: draftFilters.brand_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
                         </Text>
                       </TouchableOpacity>
@@ -1120,12 +1255,12 @@ export default function HomeScreen() {
                           key={brand.id}
                           style={[
                             styles.filterChip,
-                            { backgroundColor: filters.brand_id === brand.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.brand_id === brand.id.toString() && styles.filterChipActive,
+                            { backgroundColor: draftFilters.brand_id === brand.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            draftFilters.brand_id === brand.id.toString() && styles.filterChipActive,
                           ]}
                           onPress={() => handleSelectBrand(brand.id.toString())}
                         >
-                          <Text style={[styles.filterChipText, { color: filters.brand_id === brand.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          <Text style={[styles.filterChipText, { color: draftFilters.brand_id === brand.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {brand.name}
                           </Text>
                         </TouchableOpacity>
@@ -1136,7 +1271,7 @@ export default function HomeScreen() {
               </View>
 
               {/* Model Filter — only when brand selected */}
-              {filters.brand_id !== '' && (
+              {draftFilters.brand_id !== '' && (
                 <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
                   <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
                     {t('home.model') || 'Model'}
@@ -1162,13 +1297,13 @@ export default function HomeScreen() {
                               key={model.id}
                               style={[
                                 styles.filterChip,
-                                { backgroundColor: filters.model_id === model.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                                filters.model_id === model.id.toString() && styles.filterChipActive,
+                                { backgroundColor: draftFilters.model_id === model.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                draftFilters.model_id === model.id.toString() && styles.filterChipActive,
                                 { marginRight: 0, marginLeft: 8 },
                               ]}
                               onPress={() => handleSelectModel(model.id.toString())}
                             >
-                              <Text style={[styles.filterChipText, { color: filters.model_id === model.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              <Text style={[styles.filterChipText, { color: draftFilters.model_id === model.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                                 {model.name}
                               </Text>
                             </TouchableOpacity>
@@ -1176,13 +1311,13 @@ export default function HomeScreen() {
                           <TouchableOpacity
                             style={[
                               styles.filterChip,
-                              { backgroundColor: filters.model_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                              filters.model_id === '' && styles.filterChipActive,
+                              { backgroundColor: draftFilters.model_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              draftFilters.model_id === '' && styles.filterChipActive,
                               { marginRight: 0, marginLeft: 8 },
                             ]}
                             onPress={() => handleSelectModel('')}
                           >
-                            <Text style={[styles.filterChipText, { color: filters.model_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            <Text style={[styles.filterChipText, { color: draftFilters.model_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                               {t('home.all')}
                             </Text>
                           </TouchableOpacity>
@@ -1192,12 +1327,12 @@ export default function HomeScreen() {
                           <TouchableOpacity
                             style={[
                               styles.filterChip,
-                              { backgroundColor: filters.model_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                              filters.model_id === '' && styles.filterChipActive,
+                              { backgroundColor: draftFilters.model_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              draftFilters.model_id === '' && styles.filterChipActive,
                             ]}
                             onPress={() => handleSelectModel('')}
                           >
-                            <Text style={[styles.filterChipText, { color: filters.model_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            <Text style={[styles.filterChipText, { color: draftFilters.model_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                               {t('home.all')}
                             </Text>
                           </TouchableOpacity>
@@ -1206,12 +1341,12 @@ export default function HomeScreen() {
                               key={model.id}
                               style={[
                                 styles.filterChip,
-                                { backgroundColor: filters.model_id === model.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                                filters.model_id === model.id.toString() && styles.filterChipActive,
+                                { backgroundColor: draftFilters.model_id === model.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                draftFilters.model_id === model.id.toString() && styles.filterChipActive,
                               ]}
                               onPress={() => handleSelectModel(model.id.toString())}
                             >
-                              <Text style={[styles.filterChipText, { color: filters.model_id === model.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              <Text style={[styles.filterChipText, { color: draftFilters.model_id === model.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                                 {model.name}
                               </Text>
                             </TouchableOpacity>
@@ -1224,7 +1359,7 @@ export default function HomeScreen() {
               )}
 
               {/* Storage Filter — only when model selected */}
-              {filters.model_id !== '' && (
+              {draftFilters.model_id !== '' && (
                 <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
                   <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
                     {t('home.storage') || 'Storage'}
@@ -1252,13 +1387,13 @@ export default function HomeScreen() {
                               key={s.id}
                               style={[
                                 styles.filterChip,
-                                { backgroundColor: filters.model_storage_id === s.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                                filters.model_storage_id === s.id.toString() && styles.filterChipActive,
+                                { backgroundColor: draftFilters.model_storage_id === s.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                draftFilters.model_storage_id === s.id.toString() && styles.filterChipActive,
                                 { marginRight: 0, marginLeft: 8 },
                               ]}
-                              onPress={() => setFilters(prev => ({ ...prev, model_storage_id: s.id.toString() }))}
+                              onPress={() => setDraftFilters(prev => ({ ...prev, model_storage_id: s.id.toString() }))}
                             >
-                              <Text style={[styles.filterChipText, { color: filters.model_storage_id === s.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              <Text style={[styles.filterChipText, { color: draftFilters.model_storage_id === s.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                                 {s.label || s.capacity_gb ? `${s.capacity_gb} GB` : s.label}
                               </Text>
                             </TouchableOpacity>
@@ -1266,13 +1401,13 @@ export default function HomeScreen() {
                           <TouchableOpacity
                             style={[
                               styles.filterChip,
-                              { backgroundColor: filters.model_storage_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                              filters.model_storage_id === '' && styles.filterChipActive,
+                              { backgroundColor: draftFilters.model_storage_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              draftFilters.model_storage_id === '' && styles.filterChipActive,
                               { marginRight: 0, marginLeft: 8 },
                             ]}
-                            onPress={() => setFilters(prev => ({ ...prev, model_storage_id: '' }))}
+                            onPress={() => setDraftFilters(prev => ({ ...prev, model_storage_id: '' }))}
                           >
-                            <Text style={[styles.filterChipText, { color: filters.model_storage_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            <Text style={[styles.filterChipText, { color: draftFilters.model_storage_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                               {t('home.all')}
                             </Text>
                           </TouchableOpacity>
@@ -1282,12 +1417,12 @@ export default function HomeScreen() {
                           <TouchableOpacity
                             style={[
                               styles.filterChip,
-                              { backgroundColor: filters.model_storage_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                              filters.model_storage_id === '' && styles.filterChipActive,
+                              { backgroundColor: draftFilters.model_storage_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              draftFilters.model_storage_id === '' && styles.filterChipActive,
                             ]}
-                            onPress={() => setFilters(prev => ({ ...prev, model_storage_id: '' }))}
+                            onPress={() => setDraftFilters(prev => ({ ...prev, model_storage_id: '' }))}
                           >
-                            <Text style={[styles.filterChipText, { color: filters.model_storage_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            <Text style={[styles.filterChipText, { color: draftFilters.model_storage_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                               {t('home.all')}
                             </Text>
                           </TouchableOpacity>
@@ -1296,12 +1431,12 @@ export default function HomeScreen() {
                               key={s.id}
                               style={[
                                 styles.filterChip,
-                                { backgroundColor: filters.model_storage_id === s.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                                filters.model_storage_id === s.id.toString() && styles.filterChipActive,
+                                { backgroundColor: draftFilters.model_storage_id === s.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                draftFilters.model_storage_id === s.id.toString() && styles.filterChipActive,
                               ]}
-                              onPress={() => setFilters(prev => ({ ...prev, model_storage_id: s.id.toString() }))}
+                              onPress={() => setDraftFilters(prev => ({ ...prev, model_storage_id: s.id.toString() }))}
                             >
-                              <Text style={[styles.filterChipText, { color: filters.model_storage_id === s.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              <Text style={[styles.filterChipText, { color: draftFilters.model_storage_id === s.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                                 {s.label || (s.capacity_gb ? `${s.capacity_gb} GB` : String(s.id))}
                               </Text>
                             </TouchableOpacity>
@@ -1314,7 +1449,7 @@ export default function HomeScreen() {
               )}
 
               {/* Color Filter — only when model selected */}
-              {filters.model_id !== '' && (
+              {draftFilters.model_id !== '' && (
                 <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
                   <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
                     {t('home.color') || 'Color'}
@@ -1342,13 +1477,13 @@ export default function HomeScreen() {
                               key={c.id}
                               style={[
                                 styles.filterChip,
-                                { backgroundColor: filters.model_color_id === c.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                                filters.model_color_id === c.id.toString() && styles.filterChipActive,
+                                { backgroundColor: draftFilters.model_color_id === c.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                draftFilters.model_color_id === c.id.toString() && styles.filterChipActive,
                                 { marginRight: 0, marginLeft: 8 },
                               ]}
-                              onPress={() => setFilters(prev => ({ ...prev, model_color_id: c.id.toString() }))}
+                              onPress={() => setDraftFilters(prev => ({ ...prev, model_color_id: c.id.toString() }))}
                             >
-                              <Text style={[styles.filterChipText, { color: filters.model_color_id === c.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              <Text style={[styles.filterChipText, { color: draftFilters.model_color_id === c.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                                 {c.display_name || c.name}
                               </Text>
                             </TouchableOpacity>
@@ -1356,13 +1491,13 @@ export default function HomeScreen() {
                           <TouchableOpacity
                             style={[
                               styles.filterChip,
-                              { backgroundColor: filters.model_color_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                              filters.model_color_id === '' && styles.filterChipActive,
+                              { backgroundColor: draftFilters.model_color_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              draftFilters.model_color_id === '' && styles.filterChipActive,
                               { marginRight: 0, marginLeft: 8 },
                             ]}
-                            onPress={() => setFilters(prev => ({ ...prev, model_color_id: '' }))}
+                            onPress={() => setDraftFilters(prev => ({ ...prev, model_color_id: '' }))}
                           >
-                            <Text style={[styles.filterChipText, { color: filters.model_color_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            <Text style={[styles.filterChipText, { color: draftFilters.model_color_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                               {t('home.all')}
                             </Text>
                           </TouchableOpacity>
@@ -1372,12 +1507,12 @@ export default function HomeScreen() {
                           <TouchableOpacity
                             style={[
                               styles.filterChip,
-                              { backgroundColor: filters.model_color_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                              filters.model_color_id === '' && styles.filterChipActive,
+                              { backgroundColor: draftFilters.model_color_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              draftFilters.model_color_id === '' && styles.filterChipActive,
                             ]}
-                            onPress={() => setFilters(prev => ({ ...prev, model_color_id: '' }))}
+                            onPress={() => setDraftFilters(prev => ({ ...prev, model_color_id: '' }))}
                           >
-                            <Text style={[styles.filterChipText, { color: filters.model_color_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            <Text style={[styles.filterChipText, { color: draftFilters.model_color_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                               {t('home.all')}
                             </Text>
                           </TouchableOpacity>
@@ -1386,12 +1521,12 @@ export default function HomeScreen() {
                               key={c.id}
                               style={[
                                 styles.filterChip,
-                                { backgroundColor: filters.model_color_id === c.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                                filters.model_color_id === c.id.toString() && styles.filterChipActive,
+                                { backgroundColor: draftFilters.model_color_id === c.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                                draftFilters.model_color_id === c.id.toString() && styles.filterChipActive,
                               ]}
-                              onPress={() => setFilters(prev => ({ ...prev, model_color_id: c.id.toString() }))}
+                              onPress={() => setDraftFilters(prev => ({ ...prev, model_color_id: c.id.toString() }))}
                             >
-                              <Text style={[styles.filterChipText, { color: filters.model_color_id === c.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                              <Text style={[styles.filterChipText, { color: draftFilters.model_color_id === c.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                                 {c.display_name || c.name}
                               </Text>
                             </TouchableOpacity>
@@ -1424,13 +1559,13 @@ export default function HomeScreen() {
                           key={condition.id}
                           style={[
                             styles.filterChip,
-                            { backgroundColor: filters.condition_id === condition.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.condition_id === condition.id.toString() && styles.filterChipActive,
+                            { backgroundColor: draftFilters.condition_id === condition.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            draftFilters.condition_id === condition.id.toString() && styles.filterChipActive,
                             { marginRight: 0, marginLeft: 8 },
                           ]}
-                          onPress={() => setFilters(prev => ({ ...prev, condition_id: condition.id.toString() }))}
+                          onPress={() => setDraftFilters(prev => ({ ...prev, condition_id: condition.id.toString() }))}
                         >
-                          <Text style={[styles.filterChipText, { color: filters.condition_id === condition.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          <Text style={[styles.filterChipText, { color: draftFilters.condition_id === condition.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {(() => {
                               const k = condition.name?.toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
                               const map = { new: t('conditions.new'), likenew: t('conditions.likeNew'), usedlikenew: t('conditions.usedlikenew'), usedgood: t('conditions.usedgood'), usedfair: t('conditions.usedfair'), excellent: t('conditions.excellent'), verygood: t('conditions.veryGood'), good: t('conditions.good'), fair: t('conditions.fair'), poor: t('conditions.poor'), used: t('conditions.used'), refurbished: t('conditions.refurbished') };
@@ -1442,13 +1577,13 @@ export default function HomeScreen() {
                       <TouchableOpacity
                         style={[
                           styles.filterChip,
-                          { backgroundColor: filters.condition_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.condition_id === '' && styles.filterChipActive,
+                          { backgroundColor: draftFilters.condition_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          draftFilters.condition_id === '' && styles.filterChipActive,
                           { marginRight: 0, marginLeft: 8 },
                         ]}
-                        onPress={() => setFilters(prev => ({ ...prev, condition_id: '' }))}
+                        onPress={() => setDraftFilters(prev => ({ ...prev, condition_id: '' }))}
                       >
-                        <Text style={[styles.filterChipText, { color: filters.condition_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                        <Text style={[styles.filterChipText, { color: draftFilters.condition_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
                         </Text>
                       </TouchableOpacity>
@@ -1458,12 +1593,12 @@ export default function HomeScreen() {
                       <TouchableOpacity
                         style={[
                           styles.filterChip,
-                          { backgroundColor: filters.condition_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.condition_id === '' && styles.filterChipActive,
+                          { backgroundColor: draftFilters.condition_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          draftFilters.condition_id === '' && styles.filterChipActive,
                         ]}
-                        onPress={() => setFilters(prev => ({ ...prev, condition_id: '' }))}
+                        onPress={() => setDraftFilters(prev => ({ ...prev, condition_id: '' }))}
                       >
-                        <Text style={[styles.filterChipText, { color: filters.condition_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                        <Text style={[styles.filterChipText, { color: draftFilters.condition_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
                         </Text>
                       </TouchableOpacity>
@@ -1472,12 +1607,12 @@ export default function HomeScreen() {
                           key={condition.id}
                           style={[
                             styles.filterChip,
-                            { backgroundColor: filters.condition_id === condition.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.condition_id === condition.id.toString() && styles.filterChipActive,
+                            { backgroundColor: draftFilters.condition_id === condition.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            draftFilters.condition_id === condition.id.toString() && styles.filterChipActive,
                           ]}
-                          onPress={() => setFilters(prev => ({ ...prev, condition_id: condition.id.toString() }))}
+                          onPress={() => setDraftFilters(prev => ({ ...prev, condition_id: condition.id.toString() }))}
                         >
-                          <Text style={[styles.filterChipText, { color: filters.condition_id === condition.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          <Text style={[styles.filterChipText, { color: draftFilters.condition_id === condition.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {(() => {
                               const k = condition.name?.toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
                               const map = { new: t('conditions.new'), likenew: t('conditions.likeNew'), usedlikenew: t('conditions.usedlikenew'), usedgood: t('conditions.usedgood'), usedfair: t('conditions.usedfair'), excellent: t('conditions.excellent'), verygood: t('conditions.veryGood'), good: t('conditions.good'), fair: t('conditions.fair'), poor: t('conditions.poor'), used: t('conditions.used'), refurbished: t('conditions.refurbished') };
@@ -1495,9 +1630,9 @@ export default function HomeScreen() {
               <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
                 <View style={[styles.filterLabelRow, getFlexDirection(isRTL, 'row')]}>
                   <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('home.priceRange')}</Text>
-                  {(filters.min_price || filters.max_price) && (
+                  {(draftFilters.min_price || draftFilters.max_price) && (
                     <TouchableOpacity
-                      onPress={() => setFilters(prev => ({ ...prev, min_price: '', max_price: '' }))}
+                      onPress={() => setDraftFilters(prev => ({ ...prev, min_price: '', max_price: '' }))}
                       style={styles.priceClearButton}
                     >
                       <Ionicons name="close-circle" size={18} color={colors.primary} />
@@ -1512,8 +1647,8 @@ export default function HomeScreen() {
                       placeholder="0"
                       placeholderTextColor={colors.textSecondary}
                       keyboardType="numeric"
-                      value={filters.min_price}
-                      onChangeText={(text) => setFilters(prev => ({ ...prev, min_price: text }))}
+                      value={draftFilters.min_price}
+                      onChangeText={(text) => setDraftFilters(prev => ({ ...prev, min_price: text }))}
                     />
                   </View>
                   <Text style={[styles.priceSeparator, { color: colors.textSecondary }]}>-</Text>
@@ -1524,8 +1659,8 @@ export default function HomeScreen() {
                       placeholder={t('home.noLimit')}
                       placeholderTextColor={colors.textSecondary}
                       keyboardType="numeric"
-                      value={filters.max_price}
-                      onChangeText={(text) => setFilters(prev => ({ ...prev, max_price: text }))}
+                      value={draftFilters.max_price}
+                      onChangeText={(text) => setDraftFilters(prev => ({ ...prev, max_price: text }))}
                     />
                   </View>
                 </View>
@@ -1533,7 +1668,7 @@ export default function HomeScreen() {
 
               {/* Battery Filter — only for phones category */}
               {(() => {
-                const selectedCat = categories.find(c => c.id.toString() === filters.category_id);
+                const selectedCat = categories.find(c => c.id.toString() === draftFilters.category_id);
                 if (!selectedCat || selectedCat.slug !== 'phones') return null;
                 return (
                   <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
@@ -1541,9 +1676,9 @@ export default function HomeScreen() {
                       <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
                         {t('home.batteryHealth') || 'Battery Health (%)'}
                       </Text>
-                      {(filters.min_battery || filters.max_battery) && (
+                      {(draftFilters.min_battery || draftFilters.max_battery) && (
                         <TouchableOpacity
-                          onPress={() => setFilters(prev => ({ ...prev, min_battery: '', max_battery: '' }))}
+                          onPress={() => setDraftFilters(prev => ({ ...prev, min_battery: '', max_battery: '' }))}
                           style={styles.priceClearButton}
                         >
                           <Ionicons name="close-circle" size={18} color={colors.primary} />
@@ -1560,8 +1695,8 @@ export default function HomeScreen() {
                           placeholder="0"
                           placeholderTextColor={colors.textSecondary}
                           keyboardType="numeric"
-                          value={filters.min_battery}
-                          onChangeText={(text) => setFilters(prev => ({ ...prev, min_battery: text }))}
+                          value={draftFilters.min_battery}
+                          onChangeText={(text) => setDraftFilters(prev => ({ ...prev, min_battery: text }))}
                         />
                       </View>
                       <Text style={[styles.priceSeparator, { color: colors.textSecondary }]}>-</Text>
@@ -1574,8 +1709,8 @@ export default function HomeScreen() {
                           placeholder="100"
                           placeholderTextColor={colors.textSecondary}
                           keyboardType="numeric"
-                          value={filters.max_battery}
-                          onChangeText={(text) => setFilters(prev => ({ ...prev, max_battery: text }))}
+                          value={draftFilters.max_battery}
+                          onChangeText={(text) => setDraftFilters(prev => ({ ...prev, max_battery: text }))}
                         />
                       </View>
                     </View>
@@ -1606,13 +1741,13 @@ export default function HomeScreen() {
                           key={city.id}
                           style={[
                             styles.filterChip,
-                            { backgroundColor: filters.city_id === city.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.city_id === city.id.toString() && styles.filterChipActive,
+                            { backgroundColor: draftFilters.city_id === city.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            draftFilters.city_id === city.id.toString() && styles.filterChipActive,
                             { marginRight: 0, marginLeft: 8 },
                           ]}
                           onPress={() => handleSelectCity(city.id.toString())}
                         >
-                          <Text style={[styles.filterChipText, { color: filters.city_id === city.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          <Text style={[styles.filterChipText, { color: draftFilters.city_id === city.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {localizedPlaceName(city, language)}
                           </Text>
                         </TouchableOpacity>
@@ -1620,13 +1755,13 @@ export default function HomeScreen() {
                       <TouchableOpacity
                         style={[
                           styles.filterChip,
-                          { backgroundColor: filters.city_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.city_id === '' && styles.filterChipActive,
+                          { backgroundColor: draftFilters.city_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          draftFilters.city_id === '' && styles.filterChipActive,
                           { marginRight: 0, marginLeft: 8 },
                         ]}
                         onPress={() => handleSelectCity('')}
                       >
-                        <Text style={[styles.filterChipText, { color: filters.city_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                        <Text style={[styles.filterChipText, { color: draftFilters.city_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
                         </Text>
                       </TouchableOpacity>
@@ -1636,12 +1771,12 @@ export default function HomeScreen() {
                       <TouchableOpacity
                         style={[
                           styles.filterChip,
-                          { backgroundColor: filters.city_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.city_id === '' && styles.filterChipActive,
+                          { backgroundColor: draftFilters.city_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          draftFilters.city_id === '' && styles.filterChipActive,
                         ]}
                         onPress={() => handleSelectCity('')}
                       >
-                        <Text style={[styles.filterChipText, { color: filters.city_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                        <Text style={[styles.filterChipText, { color: draftFilters.city_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {t('home.all')}
                         </Text>
                       </TouchableOpacity>
@@ -1650,12 +1785,12 @@ export default function HomeScreen() {
                           key={city.id}
                           style={[
                             styles.filterChip,
-                            { backgroundColor: filters.city_id === city.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.city_id === city.id.toString() && styles.filterChipActive,
+                            { backgroundColor: draftFilters.city_id === city.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            draftFilters.city_id === city.id.toString() && styles.filterChipActive,
                           ]}
                           onPress={() => handleSelectCity(city.id.toString())}
                         >
-                          <Text style={[styles.filterChipText, { color: filters.city_id === city.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          <Text style={[styles.filterChipText, { color: draftFilters.city_id === city.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {localizedPlaceName(city, language)}
                           </Text>
                         </TouchableOpacity>
@@ -1666,7 +1801,7 @@ export default function HomeScreen() {
               </View>
 
               {/* Area Filter — only when city selected */}
-              {filters.city_id !== '' && areas.length > 0 && (
+              {draftFilters.city_id !== '' && areas.length > 0 && (
                 <View style={[styles.filterSection, { borderBottomColor: colors.borderLight }]}>
                   <Text style={[styles.filterLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
                     {t('home.area') || 'Area'}
@@ -1689,13 +1824,13 @@ export default function HomeScreen() {
                             key={area.id}
                             style={[
                               styles.filterChip,
-                              { backgroundColor: filters.area_id === area.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                              filters.area_id === area.id.toString() && styles.filterChipActive,
+                              { backgroundColor: draftFilters.area_id === area.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              draftFilters.area_id === area.id.toString() && styles.filterChipActive,
                               { marginRight: 0, marginLeft: 8 },
                             ]}
-                            onPress={() => setFilters(prev => ({ ...prev, area_id: area.id.toString() }))}
+                            onPress={() => setDraftFilters(prev => ({ ...prev, area_id: area.id.toString() }))}
                           >
-                            <Text style={[styles.filterChipText, { color: filters.area_id === area.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            <Text style={[styles.filterChipText, { color: draftFilters.area_id === area.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                               {localizedPlaceName(area, language)}
                             </Text>
                           </TouchableOpacity>
@@ -1703,13 +1838,13 @@ export default function HomeScreen() {
                         <TouchableOpacity
                           style={[
                             styles.filterChip,
-                            { backgroundColor: filters.area_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.area_id === '' && styles.filterChipActive,
+                            { backgroundColor: draftFilters.area_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            draftFilters.area_id === '' && styles.filterChipActive,
                             { marginRight: 0, marginLeft: 8 },
                           ]}
-                          onPress={() => setFilters(prev => ({ ...prev, area_id: '' }))}
+                          onPress={() => setDraftFilters(prev => ({ ...prev, area_id: '' }))}
                         >
-                          <Text style={[styles.filterChipText, { color: filters.area_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          <Text style={[styles.filterChipText, { color: draftFilters.area_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {t('home.all')}
                           </Text>
                         </TouchableOpacity>
@@ -1719,12 +1854,12 @@ export default function HomeScreen() {
                         <TouchableOpacity
                           style={[
                             styles.filterChip,
-                            { backgroundColor: filters.area_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                            filters.area_id === '' && styles.filterChipActive,
+                            { backgroundColor: draftFilters.area_id === '' ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                            draftFilters.area_id === '' && styles.filterChipActive,
                           ]}
-                          onPress={() => setFilters(prev => ({ ...prev, area_id: '' }))}
+                          onPress={() => setDraftFilters(prev => ({ ...prev, area_id: '' }))}
                         >
-                          <Text style={[styles.filterChipText, { color: filters.area_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                          <Text style={[styles.filterChipText, { color: draftFilters.area_id === '' ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                             {t('home.all')}
                           </Text>
                         </TouchableOpacity>
@@ -1733,12 +1868,12 @@ export default function HomeScreen() {
                             key={area.id}
                             style={[
                               styles.filterChip,
-                              { backgroundColor: filters.area_id === area.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                              filters.area_id === area.id.toString() && styles.filterChipActive,
+                              { backgroundColor: draftFilters.area_id === area.id.toString() ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                              draftFilters.area_id === area.id.toString() && styles.filterChipActive,
                             ]}
-                            onPress={() => setFilters(prev => ({ ...prev, area_id: area.id.toString() }))}
+                            onPress={() => setDraftFilters(prev => ({ ...prev, area_id: area.id.toString() }))}
                           >
-                            <Text style={[styles.filterChipText, { color: filters.area_id === area.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                            <Text style={[styles.filterChipText, { color: draftFilters.area_id === area.id.toString() ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                               {localizedPlaceName(area, language)}
                             </Text>
                           </TouchableOpacity>
@@ -1778,13 +1913,13 @@ export default function HomeScreen() {
                         key={opt.value}
                         style={[
                           styles.filterChip,
-                          { backgroundColor: filters.sort === opt.value ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
-                          filters.sort === opt.value && styles.filterChipActive,
+                          { backgroundColor: draftFilters.sort === opt.value ? colors.primary : colors.inputBackground, borderColor: colors.inputBorder },
+                          draftFilters.sort === opt.value && styles.filterChipActive,
                           isRTL ? { marginRight: 0, marginLeft: 8 } : {},
                         ]}
-                        onPress={() => setFilters(prev => ({ ...prev, sort: opt.value }))}
+                        onPress={() => setDraftFilters(prev => ({ ...prev, sort: opt.value }))}
                       >
-                        <Text style={[styles.filterChipText, { color: filters.sort === opt.value ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
+                        <Text style={[styles.filterChipText, { color: draftFilters.sort === opt.value ? '#ffffff' : colors.text }, getTextAlign(isRTL, 'center')]}>
                           {opt.label}
                         </Text>
                       </TouchableOpacity>
@@ -1798,7 +1933,7 @@ export default function HomeScreen() {
             <View style={[styles.filterActions, { borderTopColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}>
               <TouchableOpacity
                 style={[styles.clearButton, { backgroundColor: colors.inputBackground, borderColor: colors.inputBorder }]}
-                onPress={handleClearFilters}
+                onPress={handleClearDraftFilters}
               >
                 <Text style={[styles.clearButtonText, { color: colors.text }, getTextAlign(isRTL, 'center')]}>{t('home.clearAll')}</Text>
               </TouchableOpacity>
@@ -1821,7 +1956,7 @@ export default function HomeScreen() {
         onRequestClose={handleCloseMenu}
         onShow={() => {
           // Refresh user name when menu opens
-          fetchAdminStatus();
+          fetchUserProfile();
           // Reset animation value based on RTL
           menuSlideAnim.setValue(isRTL ? -SCREEN_WIDTH : SCREEN_WIDTH);
           // Animate menu sliding in (from right in LTR, from left in RTL)
@@ -1988,21 +2123,6 @@ export default function HomeScreen() {
                   </View>
                 </View>
 
-                {isAdmin && (
-                  <TouchableOpacity
-                    style={[styles.menuItem, styles.menuItemLast, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
-                    onPress={() => {
-                      handleCloseMenu();
-                      navigation.navigate('AdminDashboard');
-                    }}
-                  >
-                    <View style={[styles.menuItemIcon, { backgroundColor: colors.inputBackground, marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }]}>
-                      <Ionicons name="shield" size={22} color={colors.primary} />
-                    </View>
-                    <Text style={[styles.menuItemText, { color: colors.text, marginLeft: isRTL ? 0 : 12, marginRight: isRTL ? 12 : 0 }, getTextAlign(isRTL, 'auto')]}>{t('profile.adminDashboard')}</Text>
-                    <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
-                  </TouchableOpacity>
-                )}
               </ScrollView>
 
               <View style={[styles.menuLogoutContainer, { 
@@ -2303,6 +2423,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     marginHorizontal: -8, // negative margin for gap
+  },
+  listingsRow: {
+    justifyContent: 'space-between',
+    paddingHorizontal: 0,
+  },
+  loadingMoreContainer: {
+    paddingVertical: 16,
+    alignItems: 'center',
   },
   card: {
     width: '48%',

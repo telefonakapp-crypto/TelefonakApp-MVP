@@ -12,26 +12,7 @@ const {
 // so hiding a listing also stops new offers.
 const { LISTING_STATUS } = require('../utils/listingStatus');
 const OFFERABLE_LISTING_STATUS = LISTING_STATUS.APPROVED;
-
-const verifyToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
-
-  try {
-    const jwt = require('jsonwebtoken');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-secret-key');
-    if (!decoded.userId) {
-      return res.status(401).json({ error: 'User ID not found in token' });
-    }
-    req.user = decoded;
-    next();
-  } catch (error) {
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-};
+const verifyToken = require('../middleware/verifyToken').requireUserId;
 
 const parsePositiveInt = (raw) => {
   const value = parseInt(raw, 10);
@@ -220,13 +201,37 @@ const resolveOffer = async (req, res, { status, notify }) => {
     }
 
     const offer = updated.rows[0];
+    const deviceName = await getListingDeviceName(pool, offer.listing_id);
+
+    // Accepting one offer closes the rest so the listing cannot have
+    // multiple accepted/pending competing outcomes.
+    let siblingRejected = [];
+    if (status === 'accepted') {
+      const siblings = await pool.query(
+        `UPDATE offers
+         SET status = 'rejected', updated_at = CURRENT_TIMESTAMP
+         WHERE listing_id = $1 AND id <> $2 AND status = 'pending'
+         RETURNING buyer_id, offered_price, listing_id`,
+        [offer.listing_id, offer.id]
+      );
+      siblingRejected = siblings.rows;
+    }
 
     await notify(pool, {
       buyerId: offer.buyer_id,
       listingId: offer.listing_id,
-      deviceName: await getListingDeviceName(pool, offer.listing_id),
+      deviceName,
       offeredPrice: offer.offered_price,
     });
+
+    for (const sibling of siblingRejected) {
+      await notifyOfferRejected(pool, {
+        buyerId: sibling.buyer_id,
+        listingId: sibling.listing_id,
+        deviceName,
+        offeredPrice: sibling.offered_price,
+      });
+    }
 
     res.json({ offer });
   } catch (error) {

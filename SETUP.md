@@ -64,12 +64,13 @@ npm run dev
 
 The server should now be running on `http://localhost:3000`
 
-### 3. Mobile App Setup
+### 3. Mobile App Setup (native iOS)
 
-1. Install Expo CLI globally (if not installed):
-```bash
-npm install -g expo-cli
-```
+> **Source of truth for day-to-day iOS work:** [`docs/13_IOS_DEVELOPMENT_WORKFLOW.md`](docs/13_IOS_DEVELOPMENT_WORKFLOW.md)
+>
+> This project uses a prebuilt native iOS app under `mobile/ios/`. Do **not** use Expo Go as the primary runner.
+
+1. Prerequisites: Xcode + iOS Simulator installed.
 
 2. Navigate to mobile directory:
 ```bash
@@ -81,25 +82,23 @@ cd mobile
 npm install
 ```
 
-4. Update API URLs in the following files:
-   - `src/screens/LoginScreen.js`
-   - `src/screens/OTPScreen.js`
-   - `src/screens/RegisterScreen.js`
-
-   Change `API_BASE_URL` to match your setup:
-   - **Android Emulator**: `http://10.0.2.2:3000/api`
-   - **iOS Simulator**: `http://localhost:3000/api`
-   - **Physical Device**: `http://YOUR_COMPUTER_IP:3000/api` (e.g., `http://192.168.1.100:3000/api`)
-
-5. Start the Expo development server:
+4. With the backend already running on port 3000, start Metro:
 ```bash
 npm start
 ```
 
-6. Run on your device:
-   - Press `a` for Android emulator
-   - Press `i` for iOS simulator
-   - Scan QR code with Expo Go app on physical device
+5. In a second terminal, build and launch the native Debug app:
+```bash
+cd mobile
+npx expo run:ios
+```
+
+Optional (Metro already running):
+```bash
+npx expo run:ios --no-bundler
+```
+
+Open the **Telefonak** app on the simulator. See the workflow doc for `prebuild`, rebuild rules, and troubleshooting.
 
 ## Testing
 
@@ -126,11 +125,13 @@ In development, the OTP code is returned in the API response for testing. Check 
 
 ### Mobile App Issues
 - **Cannot connect to API**: 
-  - Check backend is running
-  - Verify API_BASE_URL is correct for your setup
+  - Check backend is running on port 3000
   - For physical devices, ensure phone and computer are on same network
-- **Expo errors**: 
-  - Clear cache: `expo start -c`
+- **No script URL provided** / **Could not connect to the server** / stale native builds:
+  - Follow [`docs/13_IOS_DEVELOPMENT_WORKFLOW.md`](docs/13_IOS_DEVELOPMENT_WORKFLOW.md) §7
+  - Confirm Metro on `:8081`, then `npx expo run:ios` (rebuild if needed)
+- **Metro / Expo bundler errors**: 
+  - Clear cache: `npx expo start --clear`
   - Reinstall dependencies: `rm -rf node_modules && npm install`
 - **Navigation errors**: 
   - Ensure all screens are properly imported
