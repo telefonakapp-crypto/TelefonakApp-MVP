@@ -1,0 +1,1 @@
+This file is an unused placeholder. Authentication and architecture decisions that shipped are in [14_AUTHENTICATION_ARCHITECTURE.md](14_AUTHENTICATION_ARCHITECTURE.md) and [10_ARCHITECTURE.md](10_ARCHITECTURE.md).

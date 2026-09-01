@@ -48,6 +48,7 @@ backend/uploads/*
 *.tmp
 *.temp
 .cache/
+tmp/
 
 # Backup files
 *_backup/

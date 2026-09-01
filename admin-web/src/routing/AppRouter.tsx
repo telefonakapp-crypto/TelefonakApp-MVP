@@ -7,6 +7,7 @@ import { AdminLayout } from '../layouts/AdminLayout';
 import { LoginPage } from '../pages/auth/LoginPage';
 import { DashboardPage } from '../pages/dashboard/DashboardPage';
 import { ListingsPage } from '../pages/listings/ListingsPage';
+import { ModerationHistoryPage } from '../pages/moderation/ModerationHistoryPage';
 import { BannersPage } from '../pages/banners/BannersPage';
 import { AdminsPage } from '../pages/admins/AdminsPage';
 import { UsersPage } from '../pages/users/UsersPage';
@@ -41,6 +42,7 @@ const router = createBrowserRouter([
         children: [
           { path: '/', element: <DashboardPage /> },
           { path: '/listings', element: <ListingsPage /> },
+          { path: '/moderation-history', element: <ModerationHistoryPage /> },
           { path: '/users', element: <UsersPage /> },
           { path: '/banners', element: <BannersPage /> },
           { path: '/notifications', element: <NotificationsPage /> },

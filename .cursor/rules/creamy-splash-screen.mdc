@@ -1,0 +1,25 @@
+---
+description: Restore the creamy splash screen checkpoint when the user says "creamy splash screen"
+alwaysApply: true
+---
+
+# Creamy splash screen checkpoint
+
+If the user says **creamy splash screen** (or asks to restore/go back to it), restore this exact splash version. Do not redesign. Do not change other screens, navigation, backend, or the iOS Home Screen icon unless they explicitly ask.
+
+## Restore steps
+
+1. Copy `.cursor/checkpoints/creamy-splash-screen/SplashScreen.js` over `mobile/src/screens/SplashScreen.js`.
+2. Confirm these bundled assets still exist (copy from `assets/` if missing; do not redraw):
+   - Icon: `mobile/assets/telefonak-app-icon-v5.png` (source `assets/Telefonak app icon v5.png`)
+   - Wordmark: `mobile/assets/telefonak-word-mark-white-bg-bigger-curved.png` (source `assets/Telefonak word mark white bg bigger curved.png`)
+3. Stop. Do not edit layout, sizes, animation, or timing beyond the restore.
+
+## Spec
+
+- Background: solid `#F3F2EF` (not a gradient)
+- Layout: LinkedIn-style — v5 app icon visually centered; curved blue wordmark independent at the bottom; safe-area bottom padding
+- Icon: `telefonak-app-icon-v5.png` (rounded square, existing size math)
+- Wordmark: `telefonak-word-mark-white-bg-bigger-curved.png` (1:1 PNG clipped into existing bottom slot; canvas is `#F3F2EF`)
+- Animation: 800ms fade + scale on the icon; wordmark fades with the same opacity
+- Timing / App.js boot splash duration: unchanged

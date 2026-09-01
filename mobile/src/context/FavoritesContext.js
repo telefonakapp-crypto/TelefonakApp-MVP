@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAuthToken } from '../utils/authSession';
 import apiClient from '../utils/api';
 import { getApiErrorMessage, logApiError } from '../utils/apiError';
 
@@ -48,7 +49,7 @@ export const FavoritesProvider = ({ children }) => {
       if (loadingRef.current) return;
       if (loadedRef.current && !force) return;
 
-      const token = await AsyncStorage.getItem('authToken');
+      const token = await getAuthToken();
       if (!token) {
         applyFavoriteIds(new Set());
         loadedRef.current = true;
@@ -61,6 +62,13 @@ export const FavoritesProvider = ({ children }) => {
         applyFavoriteIds(new Set((response.data.listing_ids || []).map(Number)));
         loadedRef.current = true;
       } catch (error) {
+        if (
+          error?.isMaintenance ||
+          error?.name === 'MaintenanceError' ||
+          error?.code === 'ERR_MAINTENANCE'
+        ) {
+          return;
+        }
         console.error('Error loading favorites:', error);
       } finally {
         loadingRef.current = false;
@@ -101,6 +109,13 @@ export const FavoritesProvider = ({ children }) => {
         }
         return nextFavorite;
       } catch (error) {
+        if (
+          error?.isMaintenance ||
+          error?.name === 'MaintenanceError' ||
+          error?.code === 'ERR_MAINTENANCE'
+        ) {
+          return wasFavorite;
+        }
         // Removing something that is already gone still lands on the desired state.
         if (!nextFavorite && error.response?.status === 404) {
           return false;

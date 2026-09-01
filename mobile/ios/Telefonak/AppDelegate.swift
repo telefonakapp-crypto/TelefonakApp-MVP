@@ -21,6 +21,14 @@ public class AppDelegate: ExpoAppDelegate {
     reactNativeFactory = factory
     bindReactNativeFactory(factory)
 
+    // Readable from JS via React Native Settings — used to avoid tel: openURL
+    // on the simulator (no Phone app; RN would yellow-box warn).
+#if targetEnvironment(simulator)
+    UserDefaults.standard.set(true, forKey: "telefonak_is_simulator")
+#else
+    UserDefaults.standard.set(false, forKey: "telefonak_is_simulator")
+#endif
+
 #if os(iOS) || os(tvOS)
     window = UIWindow(frame: UIScreen.main.bounds)
     factory.startReactNative(

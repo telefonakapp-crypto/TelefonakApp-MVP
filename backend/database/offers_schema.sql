@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS offers (
     offered_price DECIMAL(10,2) NOT NULL CHECK (offered_price > 0),
     status        VARCHAR(20)   NOT NULL DEFAULT 'pending'
                   CHECK (status IN ('pending', 'accepted', 'rejected', 'withdrawn')),
+    -- NULL = unread for the seller (Offers tab badge). Set when seller views/acts.
+    seller_seen_at TIMESTAMP    NULL,
     created_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT offers_no_self_offer CHECK (buyer_id <> seller_id)

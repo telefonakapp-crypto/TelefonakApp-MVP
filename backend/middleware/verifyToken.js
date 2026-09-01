@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../config/database');
-const { getJwtSecret } = require('../config/env');
+const { verifyCustomerToken } = require('../utils/customerAuth');
 
 /**
  * Attaches the decoded JWT to req.user, or rejects with 401.
@@ -19,10 +19,10 @@ function makeVerifyToken(options = {}) {
     }
 
     try {
-      const decoded = jwt.verify(token, getJwtSecret());
+      const decoded = verifyCustomerToken(token);
 
-      // Staff tokens (admins table) must not authenticate as marketplace customers.
-      if (decoded.adminId) {
+      // Staff tokens must not authenticate as marketplace customers.
+      if (decoded.adminId || decoded.typ === 'admin') {
         return res.status(401).json({ error: 'Invalid token' });
       }
 

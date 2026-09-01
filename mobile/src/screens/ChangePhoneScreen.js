@@ -19,6 +19,15 @@ import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import { formatPhoneNumber, isValidPhoneNumber, PHONE_NUMBER_LENGTH } from '../utils/phone';
+import {
+  classifyOtpRequestFailure,
+  formatOtpCooldownToast,
+  formatOtpRequestWindowToast,
+  getResendCooldownFromSuccess,
+  useOtpCooldown,
+} from '../utils/otpCooldown';
+import { showToast } from '../utils/toast';
+import { ignoreIfMaintenance } from '../utils/maintenance';
 
 export default function ChangePhoneScreen() {
   const navigation = useNavigation();
@@ -27,13 +36,23 @@ export default function ChangePhoneScreen() {
   const [currentPhone, setCurrentPhone] = useState('');
   const [newPhone, setNewPhone] = useState('');
   const [loading, setLoading] = useState(false);
+  const {
+    secondsLeft,
+    isCoolingDown,
+    startCooldown,
+    beginRequest,
+    endRequest,
+  } = useOtpCooldown(0);
 
   useEffect(() => {
     // Shown for context, and lets the screen flag "same as current" locally.
     apiClient
       .get('/user/profile')
       .then((response) => setCurrentPhone(response.data.user?.phone_number || ''))
-      .catch((error) => console.error('Error fetching profile:', error.response?.data || error.message));
+      .catch((error) => {
+        if (ignoreIfMaintenance(error)) return;
+        console.error('Error fetching profile:', error.response?.data || error.message);
+      });
   }, []);
 
   const requestCode = async () => {
@@ -47,24 +66,46 @@ export default function ChangePhoneScreen() {
       return;
     }
 
+    if (isCoolingDown) {
+      showToast(formatOtpCooldownToast(secondsLeft));
+      return;
+    }
+
+    if (!beginRequest()) return;
+
     setLoading(true);
     try {
       const response = await apiClient.post('/profile/change-phone/request', {
         new_phone_number: newPhone,
       });
 
-      navigation.navigate('OTP', { phoneNumber: newPhone, purpose: 'phone-change' });
+      const cooldown = getResendCooldownFromSuccess(response.data);
+      startCooldown(cooldown);
+      navigation.navigate('OTP', {
+        phoneNumber: newPhone,
+        purpose: 'phone-change',
+        cooldownSeconds: cooldown,
+      });
 
       if (response.data?.otp) {
         Alert.alert(t('auth.otpSent'), `Your OTP is: ${response.data.otp} (Development mode)`);
       }
     } catch (error) {
+      const failure = classifyOtpRequestFailure(error);
+      if (failure.kind === 'resend_cooldown') {
+        startCooldown(failure.seconds);
+        showToast(formatOtpCooldownToast(failure.seconds));
+        return;
+      }
+      if (failure.kind === 'request_window') {
+        showToast(formatOtpRequestWindowToast(failure.seconds));
+        return;
+      }
+
       logApiError('ChangePhoneScreen.requestOTP', error);
-      Alert.alert(
-        t('common.error'),
-        getApiErrorMessage(error, t('auth.failedToSendOTP'))
-      );
+      showToast(getApiErrorMessage(error, t('auth.failedToSendOTP')));
     } finally {
+      endRequest();
       setLoading(false);
     }
   };
@@ -118,14 +159,23 @@ export default function ChangePhoneScreen() {
         </View>
 
         <TouchableOpacity
-          style={[styles.submitButton, { backgroundColor: colors.primary }, loading && styles.submitButtonDisabled]}
+          style={[
+            styles.submitButton,
+            { backgroundColor: colors.primary },
+            (loading || isCoolingDown) && styles.submitButtonDisabled,
+          ]}
           onPress={requestCode}
           disabled={loading}
+          accessibilityState={{ disabled: loading || isCoolingDown }}
         >
           {loading ? (
             <ActivityIndicator color="#ffffff" />
           ) : (
-            <Text style={styles.submitButtonText}>{t('changePhone.continue')}</Text>
+            <Text style={styles.submitButtonText}>
+              {isCoolingDown
+                ? `Resend code in ${secondsLeft}s`
+                : t('changePhone.continue')}
+            </Text>
           )}
         </TouchableOpacity>
 

@@ -27,14 +27,18 @@ export default function FavoriteButton({
     async (event) => {
       event?.stopPropagation?.();
       if (pending) return;
+      const wasFavorite = favorited;
       const result = await toggleFavorite(listingId);
-      onToggled?.(result);
+      // Only notify when the server-backed state actually changed.
+      if (result !== wasFavorite) {
+        onToggled?.(result);
+      }
     },
-    [listingId, onToggled, pending, toggleFavorite]
+    [favorited, listingId, onToggled, pending, toggleFavorite]
   );
 
   const overlayBackground = isDarkMode ? 'rgba(9, 9, 11, 0.65)' : 'rgba(255, 255, 255, 0.9)';
-  const inactiveColor = variant === 'overlay' ? (isDarkMode ? '#ffffff' : '#09090b') : colors.text;
+  const inactiveColor = variant === 'overlay' ? (isDarkMode ? '#ffffff' : '#1a1c1c') : colors.text;
 
   return (
     <TouchableOpacity

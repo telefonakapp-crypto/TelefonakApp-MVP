@@ -4,6 +4,7 @@ import { fetchUserDetail, updateUserStatus } from '../../services/userService';
 import { UserStatusBadge } from './UsersTable';
 import { ListingStatusBadge } from '../listings/ListingStatusBadge';
 import { ConfirmModal } from '../listings/ConfirmModal';
+import { getListingDisplayName } from '../../utils/listingDisplayName';
 
 function formatDate(value?: string | null) {
   if (!value) return '—';
@@ -18,6 +19,18 @@ function formatPrice(price: number | string) {
   const value = typeof price === 'number' ? price : Number(price);
   if (Number.isNaN(value)) return String(price);
   return `${value.toLocaleString()} JOD`;
+}
+
+function formatDeactivationReason(reason?: string | null) {
+  if (!reason) return '—';
+  const labels: Record<string, string> = {
+    no_longer_useful: 'No longer finds Telefonak useful',
+    sold_phone: 'Sold their phone',
+    need_a_break: 'Needs a break',
+    not_using_anymore: 'No longer uses Telefonak',
+    disabled_by_admin: 'Disabled by admin',
+  };
+  return labels[reason] || reason;
 }
 
 type UserDetailDrawerProps = {
@@ -136,6 +149,22 @@ export function UserDetailDrawer({ userId, onClose }: UserDetailDrawerProps) {
                 <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
                   <DetailField label="Full Name" value={user.full_name} />
                   <DetailField label="Phone Number" value={user.phone_number} />
+                  <DetailField
+                    label="Status"
+                    value={user.is_active ? 'Active' : 'Disabled'}
+                  />
+                  {!user.is_active ? (
+                    <>
+                      <DetailField
+                        label="Deactivated At"
+                        value={formatDate(user.deactivated_at)}
+                      />
+                      <DetailField
+                        label="Reason for deactivation"
+                        value={formatDeactivationReason(user.deactivation_reason)}
+                      />
+                    </>
+                  ) : null}
                 </dl>
 
                 <div>
@@ -180,7 +209,7 @@ export function UserDetailDrawer({ userId, onClose }: UserDetailDrawerProps) {
                           )}
                           <div className="min-w-0 flex-1">
                             <p className="truncate text-sm font-medium text-slate-900">
-                              {listing.brand_name} {listing.model_name}
+                              {getListingDisplayName(listing.brand_name, listing.model_name)}
                             </p>
                             <p className="text-xs text-slate-500">{formatPrice(listing.price)}</p>
                           </div>

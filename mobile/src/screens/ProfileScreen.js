@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,82 +6,148 @@ import {
   TouchableOpacity,
   ScrollView,
   Alert,
-  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import axios from 'axios';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useFavorites } from '../context/FavoritesContext';
 import { useNotifications } from '../context/NotificationsContext';
+import { useOffersUnread } from '../context/OffersUnreadContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
-import { API_BASE_URL } from '../utils/api';
+import apiClient from '../utils/api';
+import { ignoreIfMaintenance } from '../utils/maintenance';
+import { clearAuthSession, getRefreshToken } from '../utils/authSession';
+import { fonts, radii, space, ambientElevation } from '../utils/designTokens';
+import { EmptyState, IconButton, ProfileScreenSkeleton } from '../components/ui';
+
+function ProfileRow({ icon, label, onPress, colors, isRTL }) {
+  return (
+    <TouchableOpacity
+      style={[styles.row, getFlexDirection(isRTL, 'row')]}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
+      <View
+        style={[
+          styles.rowIcon,
+          {
+            backgroundColor: colors.surfaceContainerLow,
+            marginRight: isRTL ? 0 : space[3],
+            marginLeft: isRTL ? space[3] : 0,
+          },
+        ]}
+      >
+        <Ionicons name={icon} size={20} color={colors.primary} />
+      </View>
+      <Text style={[styles.rowText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+        {label}
+      </Text>
+      <Ionicons
+        name={isRTL ? 'chevron-back' : 'chevron-forward'}
+        size={20}
+        color={colors.textSecondary}
+      />
+    </TouchableOpacity>
+  );
+}
+
+function ProfileSection({ title, rows, colors, isRTL }) {
+  return (
+    <View style={styles.section}>
+      <Text style={[styles.sectionTitle, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>
+        {title}
+      </Text>
+      <View style={[styles.group, { backgroundColor: colors.card }, ambientElevation]}>
+        {rows.map((row, index) => (
+          <ProfileRow
+            key={row.key}
+            icon={row.icon}
+            label={row.label}
+            onPress={row.onPress}
+            colors={colors}
+            isRTL={isRTL}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
 
 export default function ProfileScreen() {
   const navigation = useNavigation();
-  const { colors } = useTheme();
+  const { colors, isDarkMode } = useTheme();
   const { t, isRTL } = useLanguage();
   const { clearFavorites } = useFavorites();
   const { clearUnreadCount } = useNotifications();
+  const { clearUnreadOffersCount } = useOffersUnread();
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   const fetchUserProfile = useCallback(async () => {
     try {
       setLoading(true);
-      const token = await AsyncStorage.getItem('authToken');
-      const response = await axios.get(`${API_BASE_URL}/user/profile`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      setLoadError(false);
+      const response = await apiClient.get('/user/profile');
       setUser(response.data.user);
     } catch (error) {
+      if (ignoreIfMaintenance(error)) return;
       console.error('Error fetching profile:', error);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    fetchUserProfile();
-  }, [fetchUserProfile]);
-
-  // Refresh profile when screen comes into focus (e.g., after editing profile)
   useFocusEffect(
     useCallback(() => {
       fetchUserProfile();
     }, [fetchUserProfile])
   );
 
-  const handleLogout = async () => {
+  const go = (screen) => () => navigation.navigate(screen);
+
+  const handleLogout = () => {
     Alert.alert(
-      t('profile.logout'),
-      t('profile.logoutConfirm'),
+      t('common.logout') || 'Logout',
+      t('common.logoutConfirm') || 'Are you sure you want to logout?',
       [
         {
-          text: t('common.cancel'),
+          text: t('common.cancel') || 'Cancel',
           style: 'cancel',
         },
         {
-          text: t('profile.logout'),
+          text: t('common.logout') || 'Logout',
           style: 'destructive',
           onPress: async () => {
             try {
-              await AsyncStorage.removeItem('authToken');
+              const refreshToken = await getRefreshToken();
+              try {
+                await apiClient.post('/auth/logout', {
+                  refresh_token: refreshToken || undefined,
+                });
+              } catch {
+                // Best-effort server revoke; always clear local session.
+              }
+              await clearAuthSession();
               await AsyncStorage.removeItem('hasSeenOnboarding');
               clearFavorites();
               clearUnreadCount();
+              clearUnreadOffersCount();
               navigation.reset({
                 index: 0,
                 routes: [{ name: 'AuthChoice' }],
               });
             } catch (error) {
-              console.error('Logout error:', error);
-              Alert.alert(t('common.error'), t('profile.failedToLogout'));
+              console.error('Logout error:', error?.message || 'failed');
+              Alert.alert(
+                t('common.error') || 'Error',
+                t('common.failedToLogout') || 'Failed to logout. Please try again.'
+              );
             }
           },
         },
@@ -89,81 +155,164 @@ export default function ProfileScreen() {
     );
   };
 
+  const sections = [
+    {
+      title: t('profile.sectionAccount'),
+      rows: [
+        {
+          key: 'editProfile',
+          icon: 'person-outline',
+          label: t('profile.editProfile'),
+          onPress: go('EditProfile'),
+        },
+      ],
+    },
+    {
+      title: t('profile.sectionPreferences'),
+      rows: [
+        {
+          key: 'settings',
+          icon: 'settings-outline',
+          label: t('profile.settings'),
+          onPress: go('Settings'),
+        },
+      ],
+    },
+    {
+      title: t('profile.sectionActivity'),
+      rows: [
+        {
+          key: 'myListings',
+          icon: 'list-outline',
+          label: t('profile.myListings'),
+          onPress: go('MyListings'),
+        },
+        {
+          key: 'saved',
+          icon: 'heart-outline',
+          label: t('profile.savedListings'),
+          onPress: go('SavedListings'),
+        },
+        {
+          key: 'myOffers',
+          icon: 'pricetag-outline',
+          label: t('offers.myOffers'),
+          onPress: go('MyOffers'),
+        },
+        {
+          key: 'receivedOffers',
+          icon: 'pricetags-outline',
+          label: t('offers.receivedOffers'),
+          onPress: go('ReceivedOffers'),
+        },
+      ],
+    },
+    {
+      title: t('profile.sectionSupport'),
+      rows: [
+        {
+          key: 'userGuide',
+          icon: 'book-outline',
+          label: t('profile.userGuide'),
+          onPress: go('UserGuide'),
+        },
+        {
+          key: 'privacy',
+          icon: 'shield-checkmark-outline',
+          label: t('profile.privacyPolicy'),
+          onPress: go('PrivacyPolicy'),
+        },
+        {
+          key: 'terms',
+          icon: 'document-text-outline',
+          label: t('profile.termsOfUse'),
+          onPress: go('TermsOfUse'),
+        },
+        {
+          key: 'contact',
+          icon: 'chatbubble-ellipses-outline',
+          label: t('profile.contactUs'),
+          onPress: go('ContactUs'),
+        },
+      ],
+    },
+  ];
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
-      <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}>
-      <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerLeft}>
-          <Ionicons name={isRTL ? "arrow-forward" : "arrow-back"} size={24} color={colors.text} />
-        </TouchableOpacity>
-        <Text style={[styles.headerTitle, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('profile.profile')}</Text>
+      <View style={[styles.header, getFlexDirection(isRTL, 'row')]}>
+        <IconButton
+          name={isRTL ? 'arrow-forward' : 'arrow-back'}
+          onPress={() => navigation.goBack()}
+          accessibilityLabel={t('common.back')}
+        />
+        <Text style={[styles.headerTitle, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+          {t('profile.profile')}
+        </Text>
+        <View style={styles.headerSpacer} />
       </View>
 
       {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
-        </View>
+        <ProfileScreenSkeleton />
+      ) : loadError && !user ? (
+        <EmptyState
+          icon="cloud-offline-outline"
+          title={t('common.error')}
+          description={t('common.somethingWentWrong')}
+          actionLabel={t('common.retry')}
+          onAction={fetchUserProfile}
+          style={styles.profileError}
+        />
       ) : (
         <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
           <View style={styles.profileSection}>
-            <View style={[styles.avatarContainer, { backgroundColor: colors.inputBackground }]}>
-              <Ionicons name="person" size={60} color={colors.primary} />
+            <View style={[styles.avatarContainer, { backgroundColor: colors.surfaceContainerLow }]}>
+              <Ionicons name="person" size={48} color={colors.primary} />
             </View>
             <Text style={[styles.profileName, { color: colors.text }, getTextAlign(isRTL, 'center')]}>
               {user ? `${user.first_name} ${user.last_name}` : t('profile.userProfile')}
             </Text>
-            {user?.phone_number && (
-              <Text style={[styles.profilePhone, { color: colors.textSecondary }]}>{user.phone_number}</Text>
-            )}
+            {user?.phone_number ? (
+              <Text style={[styles.profilePhone, { color: colors.textSecondary }]}>
+                {user.phone_number}
+              </Text>
+            ) : null}
           </View>
 
-        <View style={[styles.menuSection, { backgroundColor: colors.surface }]}>
+          {sections.map((section) => (
+            <ProfileSection
+              key={section.title}
+              title={section.title}
+              rows={section.rows}
+              colors={colors}
+              isRTL={isRTL}
+            />
+          ))}
 
           <TouchableOpacity
-            style={[styles.menuItem, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
-            onPress={() => navigation.navigate('SavedListings')}
+            style={[
+              styles.logoutButton,
+              {
+                backgroundColor: colors.surface,
+                borderColor: isDarkMode ? '#7f1d1d' : '#fee2e2',
+              },
+              getFlexDirection(isRTL, 'row'),
+            ]}
+            onPress={handleLogout}
+            accessibilityRole="button"
+            accessibilityLabel={t('common.logout')}
           >
-            <Ionicons name="heart-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 16, marginLeft: isRTL ? 16 : 0 }} />
-            <Text style={[styles.menuItemText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('profile.savedListings')}</Text>
-            <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
+            <Ionicons name="log-out-outline" size={24} color={colors.error} />
+            <Text
+              style={[
+                styles.logoutButtonText,
+                { color: colors.error },
+                getTextAlign(isRTL, 'center'),
+              ]}
+            >
+              {t('common.logout')}
+            </Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.menuItem, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
-            onPress={() => navigation.navigate('MyOffers')}
-          >
-            <Ionicons name="pricetag-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 16, marginLeft: isRTL ? 16 : 0 }} />
-            <Text style={[styles.menuItemText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('offers.myOffers')}</Text>
-            <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.menuItem, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
-            onPress={() => navigation.navigate('ReceivedOffers')}
-          >
-            <Ionicons name="pricetags-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 16, marginLeft: isRTL ? 16 : 0 }} />
-            <Text style={[styles.menuItemText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('offers.receivedOffers')}</Text>
-            <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.menuItem, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
-            onPress={() => navigation.navigate('ChangePhone')}
-          >
-            <Ionicons name="call-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 16, marginLeft: isRTL ? 16 : 0 }} />
-            <Text style={[styles.menuItemText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('profile.changePhoneNumber')}</Text>
-            <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
-          </TouchableOpacity>
-
-          <TouchableOpacity 
-            style={[styles.menuItem, { borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}
-            onPress={() => navigation.navigate('Settings')}
-          >
-            <Ionicons name="settings-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 16, marginLeft: isRTL ? 16 : 0 }} />
-            <Text style={[styles.menuItemText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('profile.settings')}</Text>
-            <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
-          </TouchableOpacity>
-        </View>
-
         </ScrollView>
       )}
     </SafeAreaView>
@@ -177,78 +326,95 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 24,
-    borderBottomWidth: 1,
+    paddingHorizontal: space[2],
+    paddingVertical: space[1],
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
+    flex: 1,
+    fontFamily: fonts.headline,
+    fontSize: 18,
+    textAlign: 'center',
   },
-  headerLeft: {
-    width: 40,
-    alignItems: 'flex-start',
-  },
+  headerSpacer: { width: 44 },
+  profileError: { flex: 1 },
   content: {
     flex: 1,
   },
   contentContainer: {
-    padding: 24,
+    paddingHorizontal: space[5],
+    paddingTop: space[4],
+    paddingBottom: space[8],
   },
   profileSection: {
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: space[6],
   },
   avatarContainer: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
+    width: 96,
+    height: 96,
+    borderRadius: radii.full,
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: space[4],
   },
   profileName: {
-    fontSize: 20,
-    fontWeight: '600',
+    fontFamily: fonts.headline,
+    fontSize: 22,
   },
   profilePhone: {
+    fontFamily: fonts.body,
     fontSize: 14,
-    marginTop: 4,
+    marginTop: space[1],
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+  section: {
+    marginBottom: space[5],
   },
-  adminText: {
-    fontWeight: '600',
+  sectionTitle: {
+    fontFamily: fonts.labelBold,
+    fontSize: 13,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    marginBottom: space[2],
+    marginHorizontal: space[1],
   },
-  menuSection: {
-    borderRadius: 12,
-    marginBottom: 24,
+  group: {
+    borderRadius: radii['2xl'] + 4,
     overflow: 'hidden',
+    paddingVertical: space[1],
   },
-  menuItem: {
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
+    minHeight: 64,
+    paddingHorizontal: space[4],
+    paddingVertical: space[2],
   },
-  menuItemText: {
+  rowIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radii.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowText: {
     flex: 1,
+    fontFamily: fonts.bodyMedium,
     fontSize: 16,
   },
   logoutButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 16,
-    borderRadius: 12,
-    marginTop: 16,
+    gap: space[2],
+    minHeight: 56,
+    marginTop: space[2],
+    marginBottom: space[4],
+    paddingHorizontal: space[4],
+    borderRadius: radii['2xl'],
+    borderWidth: 1,
   },
   logoutButtonText: {
+    fontFamily: fonts.labelBold,
     fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 8,
   },
 });
-

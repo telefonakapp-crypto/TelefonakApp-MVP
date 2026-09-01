@@ -11,6 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
+import { fonts, brand, ambientElevation, radii } from '../utils/designTokens';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -21,7 +22,7 @@ const slides = [
     description: 'Browse thousands of verified second-hand mobiles at the best prices in Jordan.',
     image: null,
     icon: '📱',
-    color: '#ecfeff', // bg-cyan-50
+    color: '#f3f3f3',
   },
   {
     id: 2,
@@ -29,7 +30,7 @@ const slides = [
     description: 'List your device quickly and connect with serious buyers instantly.',
     image: null,
     icon: '💰',
-    color: '#fff7ed', // bg-orange-50
+    color: '#eeeeee',
   },
   {
     id: 3,
@@ -37,7 +38,7 @@ const slides = [
     description: 'Verified sellers and secure communication for your peace of mind.',
     image: null,
     icon: '✅',
-    color: '#eff6ff', // bg-blue-50
+    color: '#f9f9f9',
   },
 ];
 
@@ -201,53 +202,50 @@ const styles = StyleSheet.create({
     marginTop: 32, // gap-8 equivalent
   },
   title: {
-    fontSize: 30, // text-3xl
-    fontWeight: 'bold',
-    color: '#09090b', // text-foreground
+    fontFamily: fonts.display,
+    fontSize: 30,
+    color: brand.onSurface,
     textAlign: 'center',
-    marginBottom: 16, // space-y-4 equivalent
+    marginBottom: 16,
   },
   description: {
-    color: '#71717a', // text-muted-foreground
-    fontSize: 18, // text-lg
-    lineHeight: 28, // leading-relaxed
+    fontFamily: fonts.body,
+    color: brand.secondary,
+    fontSize: 18,
+    lineHeight: 28,
     textAlign: 'center',
   },
   controlsContainer: {
-    padding: 32, // p-8
+    padding: 32,
   },
   indicatorsContainer: {
     flexDirection: 'row',
     justifyContent: 'center',
-    marginBottom: 32, // space-y-8 equivalent
+    marginBottom: 32,
   },
   indicator: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#71717a33', // bg-muted-foreground/30
-    marginHorizontal: 4, // gap-2 equivalent
+    backgroundColor: 'rgba(82, 96, 105, 0.3)',
+    marginHorizontal: 4,
   },
   indicatorActive: {
-    width: 32, // w-8
-    backgroundColor: '#667eea', // bg-primary (using app primary color)
+    width: 32,
+    backgroundColor: brand.primary,
   },
   nextButton: {
     width: '100%',
-    height: 56, // h-14
-    borderRadius: 16, // rounded-2xl
-    backgroundColor: '#667eea', // primary color
+    height: 56,
+    borderRadius: radii.xl,
+    backgroundColor: brand.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#667eea',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
+    ...ambientElevation,
   },
   nextButtonText: {
+    fontFamily: fonts.labelBold,
     color: '#ffffff',
-    fontSize: 18, // text-lg
-    fontWeight: '600',
+    fontSize: 18,
   },
 });

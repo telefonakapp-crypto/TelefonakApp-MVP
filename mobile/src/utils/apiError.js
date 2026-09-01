@@ -3,6 +3,8 @@
  * Keep technical Axios / raw transport details out of Alerts; log them in __DEV__.
  */
 
+import { ignoreIfMaintenance } from './maintenance';
+
 const TECHNICAL_PATTERNS = [
   /^request failed with status code/i,
   /^axioserror/i,
@@ -25,7 +27,16 @@ const MEANINGLESS_MESSAGES = new Set([
   'error',
 ]);
 
+/** Map known backend errors to polished customer copy */
+const FRIENDLY_MESSAGE_BY_ERROR = {
+  'Phone number not verified':
+    'Phone number not verified.\n\nPlease verify your phone number before completing registration.',
+};
+
 const DEFAULT_FALLBACK = 'Something went wrong. Please try again.';
+
+/** Handled client/API outcomes — never escalate to RN red error overlays */
+const HANDLED_STATUS_CODES = new Set([400, 401, 403, 404, 409, 422, 429]);
 
 function normalizeMessage(value) {
   if (typeof value !== 'string') return null;
@@ -76,19 +87,64 @@ function collectCandidateMessages(data) {
   return candidates;
 }
 
+function isHandledClientError(error) {
+  const status = error?.response?.status;
+  return HANDLED_STATUS_CODES.has(status);
+}
+
+/** No HTTP response — backend down, simulator race, offline, timeout. */
+export function isNetworkError(error) {
+  if (!error || error.response) return false;
+  if (error.code === 'ERR_NETWORK' || error.code === 'ECONNABORTED') return true;
+  const message = String(error.message || '');
+  return /network error|network request failed|timeout|failed to fetch/i.test(message);
+}
+
 /**
  * Log full API failure details for developers (never shown in UI).
+ * Handled 4xx + transient network errors use console.log so LogBox never shows a red overlay.
  */
+function isSilentMaintenanceError(error) {
+  return ignoreIfMaintenance(error);
+}
+
 export function logApiError(context, error) {
+  // Maintenance is an expected controlled state — never log or LogBox it.
+  if (isSilentMaintenanceError(error)) return;
+
   const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
   if (!isDev) return;
+
   const payload = {
     context,
     status: error?.response?.status,
     data: error?.response?.data,
     message: error?.message,
+    code: error?.code,
   };
+
+  if (isHandledClientError(error) || isNetworkError(error)) {
+    // Metro/terminal only — not a redbox / customer-visible failure.
+    console.log(`[API] ${context}`, payload);
+    return;
+  }
+
   console.error(`[API] ${context}`, payload);
+}
+
+/** Retry once after a short delay when the backend is still starting. */
+export async function withNetworkRetry(fn, { retries = 1, delayMs = 800 } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (!isNetworkError(error) || attempt === retries) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastError;
 }
 
 /**
@@ -99,6 +155,10 @@ export function logApiError(context, error) {
  * @returns {string}
  */
 export function getApiErrorMessage(error, fallback = DEFAULT_FALLBACK) {
+  if (isSilentMaintenanceError(error)) {
+    return '';
+  }
+
   const safeFallback =
     normalizeMessage(fallback) && !isTechnicalMessage(fallback)
       ? fallback.trim()
@@ -116,6 +176,9 @@ export function getApiErrorMessage(error, fallback = DEFAULT_FALLBACK) {
   const candidates = collectCandidateMessages(data);
 
   for (const candidate of candidates) {
+    if (FRIENDLY_MESSAGE_BY_ERROR[candidate]) {
+      return FRIENDLY_MESSAGE_BY_ERROR[candidate];
+    }
     if (isMeaningfulUserMessage(candidate)) {
       return candidate;
     }

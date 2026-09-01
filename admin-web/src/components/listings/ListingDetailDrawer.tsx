@@ -3,10 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   approveListing,
   declineListing,
+  deleteListing,
   fetchListingDetail,
 } from '../../services/listingsService';
 import { ListingStatusBadge } from './ListingStatusBadge';
 import { ConfirmModal } from './ConfirmModal';
+import { getListingDisplayName } from '../../utils/listingDisplayName';
 
 function formatPrice(price: number | string) {
   const value = typeof price === 'number' ? price : Number(price);
@@ -25,13 +27,20 @@ function formatDate(value: string) {
 type ListingDetailDrawerProps = {
   listingId: number | null;
   onClose: () => void;
+  onSelectListing?: (id: number) => void;
 };
 
-export function ListingDetailDrawer({ listingId, onClose }: ListingDetailDrawerProps) {
+export function ListingDetailDrawer({
+  listingId,
+  onClose,
+  onSelectListing,
+}: ListingDetailDrawerProps) {
   const open = listingId != null;
   const queryClient = useQueryClient();
   const [activeImage, setActiveImage] = useState(0);
-  const [confirmAction, setConfirmAction] = useState<'approve' | 'decline' | null>(null);
+  const [confirmAction, setConfirmAction] = useState<
+    'approve' | 'decline' | 'delete' | null
+  >(null);
   const [declineReason, setDeclineReason] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -61,8 +70,12 @@ export function ListingDetailDrawer({ listingId, onClose }: ListingDetailDrawerP
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['admin-listings'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-dashboard'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin-reports'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-listing', listingId] }),
     ]);
+    // Force the list to refetch after approve/decline so the row's new
+    // status is visible without a stale page.
+    await queryClient.refetchQueries({ queryKey: ['admin-listings'] });
   };
 
   const approveMutation = useMutation({
@@ -96,12 +109,48 @@ export function ListingDetailDrawer({ listingId, onClose }: ListingDetailDrawerP
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteListing(listingId as number),
+    onSuccess: async () => {
+      setConfirmAction(null);
+      await invalidateAfterModeration();
+      onClose();
+    },
+    onError: (err: unknown) => {
+      const message =
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ||
+        'Failed to delete listing';
+      setActionError(message);
+    },
+  });
+
   if (!open) return null;
 
   const listing = data?.listing;
   const images = data?.images ?? [];
-  const isPending = listing?.status === 'pending';
-  const actionLoading = approveMutation.isPending || declineMutation.isPending;
+  const status = String(listing?.status ?? '')
+    .trim()
+    .toLowerCase();
+
+  // Action matrix (single source of truth for the footer):
+  // pending/resubmitted/updated → Approve + Decline + Delete
+  // approved            → Decline + Delete
+  // declined/deleted    → none
+  const canApprove =
+    status === 'pending' || status === 'resubmitted' || status === 'updated';
+  const canDecline =
+    status === 'pending' ||
+    status === 'resubmitted' ||
+    status === 'updated' ||
+    status === 'approved';
+  const canDelete =
+    status === 'pending' ||
+    status === 'resubmitted' ||
+    status === 'updated' ||
+    status === 'approved';
+  const showModerationActions = Boolean(listing) && (canApprove || canDecline || canDelete);
+  const actionLoading =
+    approveMutation.isPending || declineMutation.isPending || deleteMutation.isPending;
 
   return (
     <>
@@ -112,13 +161,19 @@ export function ListingDetailDrawer({ listingId, onClose }: ListingDetailDrawerP
           className="absolute inset-0 bg-slate-900/40"
           onClick={onClose}
         />
-        <aside className="relative z-10 flex h-full w-full max-w-xl flex-col bg-white shadow-xl md:max-w-lg">
-          <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+        <aside className="relative z-10 flex h-full w-full max-w-xl flex-col overflow-hidden bg-white shadow-xl md:max-w-lg">
+          <div className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-3">
             <div>
               <h2 className="text-lg font-semibold text-slate-900">Listing details</h2>
               {listing ? (
                 <p className="text-sm text-slate-500">
-                  {listing.brand_name} {listing.model_name}
+                  {getListingDisplayName(listing.brand_name, listing.model_name)}
+                  {listing.revision_number != null && listing.revision_number > 1
+                    ? ` · Revision ${listing.revision_number}`
+                    : listing.revision_number === 1 &&
+                        (listing.revision_history?.length ?? 0) > 1
+                      ? ' · Revision 1'
+                      : ''}
                 </p>
               ) : null}
             </div>
@@ -131,7 +186,7 @@ export function ListingDetailDrawer({ listingId, onClose }: ListingDetailDrawerP
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4">
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
             {isLoading ? (
               <div className="animate-pulse space-y-4">
                 <div className="aspect-[4/3] rounded-xl bg-slate-200" />
@@ -195,27 +250,245 @@ export function ListingDetailDrawer({ listingId, onClose }: ListingDetailDrawerP
                   )}
                 </div>
 
-                <div className="flex items-center justify-between gap-3">
-                  <ListingStatusBadge status={listing.status} />
-                  <p className="text-sm text-slate-500">{formatDate(listing.created_at)}</p>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <ListingStatusBadge status={listing.status} />
+                    <p className="text-sm text-slate-500">{formatDate(listing.created_at)}</p>
+                  </div>
+                  {listing.status === 'approved' && listing.approved_or_rejected_at ? (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      <p>
+                        <span className="font-medium text-slate-900">Approved by:</span>{' '}
+                        {listing.moderated_by || '—'}
+                      </p>
+                      <p className="mt-1">
+                        <span className="font-medium text-slate-900">Approved at:</span>{' '}
+                        {formatDate(listing.approved_or_rejected_at)}
+                      </p>
+                    </div>
+                  ) : null}
+                  {listing.status === 'declined' && listing.approved_or_rejected_at ? (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      <p>
+                        <span className="font-medium text-slate-900">Rejected by:</span>{' '}
+                        {listing.moderated_by || '—'}
+                      </p>
+                      <p className="mt-1">
+                        <span className="font-medium text-slate-900">Rejected at:</span>{' '}
+                        {formatDate(listing.approved_or_rejected_at)}
+                      </p>
+                    </div>
+                  ) : null}
+                  {listing.previous_listing ? (
+                    <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-slate-700">
+                      <p className="font-semibold text-sky-900">
+                        {listing.previous_listing.status === 'declined'
+                          ? 'Previously Rejected'
+                          : 'Previous revision'}
+                      </p>
+                      <p className="mt-2">
+                        <span className="font-medium text-slate-900">Previous Listing ID:</span>{' '}
+                        {onSelectListing ? (
+                          <button
+                            type="button"
+                            onClick={() => onSelectListing(listing.previous_listing!.id)}
+                            className="font-medium text-sky-800 underline-offset-2 hover:underline"
+                          >
+                            #{listing.previous_listing.id}
+                          </button>
+                        ) : (
+                          <>#{listing.previous_listing.id}</>
+                        )}
+                      </p>
+                      <p className="mt-1">
+                        <span className="font-medium text-slate-900">Previous Status:</span>{' '}
+                        {listing.previous_listing.status || '—'}
+                      </p>
+                      {'price' in listing.previous_listing && listing.previous_listing.price != null ? (
+                        <p className="mt-1">
+                          <span className="font-medium text-slate-900">Previous Price:</span>{' '}
+                          {formatPrice(listing.previous_listing.price as number | string)}
+                        </p>
+                      ) : null}
+                      <p className="mt-1">
+                        <span className="font-medium text-slate-900">Previous Rejection Reason:</span>{' '}
+                        {listing.previous_listing.decline_reason?.trim() || '—'}
+                      </p>
+                      <p className="mt-1">
+                        <span className="font-medium text-slate-900">Previous Moderator:</span>{' '}
+                        {listing.previous_listing.moderated_by || '—'}
+                      </p>
+                      <p className="mt-1">
+                        <span className="font-medium text-slate-900">Previous Rejection Time:</span>{' '}
+                        {listing.previous_listing.approved_or_rejected_at
+                          ? formatDate(listing.previous_listing.approved_or_rejected_at)
+                          : '—'}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {listing.revision_number != null || listing.root_listing_id != null ? (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      <p>
+                        <span className="font-medium text-slate-900">Revision Number:</span>{' '}
+                        {listing.revision_number ?? 1}
+                      </p>
+                      <p className="mt-1">
+                        <span className="font-medium text-slate-900">Root Listing ID:</span>{' '}
+                        {listing.root_listing_id ?? listing.id}
+                      </p>
+                      {listing.previous_listing_id ? (
+                        <p className="mt-1">
+                          <span className="font-medium text-slate-900">Previous Listing ID:</span>{' '}
+                          {onSelectListing ? (
+                            <button
+                              type="button"
+                              onClick={() => onSelectListing(listing.previous_listing_id as number)}
+                              className="font-medium text-sky-800 underline-offset-2 hover:underline"
+                            >
+                              #{listing.previous_listing_id}
+                            </button>
+                          ) : (
+                            <>#{listing.previous_listing_id}</>
+                          )}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {(listing.revision_history?.length ?? 0) > 1 ? (
+                    <div className="rounded-lg border border-slate-200 bg-white px-3 py-3">
+                      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
+                        Revision History
+                      </p>
+                      <ul className="mt-3 space-y-3">
+                        {listing.revision_history!.map((revision, index) => {
+                          const isOpen = revision.id === listing.id;
+                          return (
+                            <li key={revision.id}>
+                              {index > 0 ? (
+                                <div className="mb-3 flex justify-center text-slate-300" aria-hidden>
+                                  ↓
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!isOpen && onSelectListing) {
+                                    onSelectListing(revision.id);
+                                  }
+                                }}
+                                disabled={isOpen || !onSelectListing}
+                                className={`w-full rounded-lg border px-3 py-2 text-left text-sm transition ${
+                                  isOpen
+                                    ? 'border-slate-900 bg-slate-50'
+                                    : 'border-slate-200 hover:border-slate-400 hover:bg-slate-50'
+                                } disabled:cursor-default`}
+                              >
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="font-semibold text-slate-900">
+                                    Revision {revision.revision_number}
+                                    {revision.is_current ? ' (Current)' : ''}
+                                    {' · '}#{revision.id}
+                                  </p>
+                                  <ListingStatusBadge status={revision.status} />
+                                </div>
+                                {revision.is_historical_snapshot || !revision.is_current ? (
+                                  <p className="mt-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+                                    Historical snapshot
+                                  </p>
+                                ) : null}
+                                <p className="mt-2 text-slate-600">
+                                  <span className="font-medium text-slate-900">Created:</span>{' '}
+                                  {formatDate(revision.created_at)}
+                                </p>
+                                {revision.price != null ? (
+                                  <p className="mt-1 text-slate-600">
+                                    <span className="font-medium text-slate-900">Price:</span>{' '}
+                                    {formatPrice(revision.price)}
+                                  </p>
+                                ) : null}
+                                {revision.status === 'declined' ? (
+                                  <>
+                                    <p className="mt-1 text-slate-600">
+                                      <span className="font-medium text-slate-900">Rejected by:</span>{' '}
+                                      {revision.moderated_by || '—'}
+                                    </p>
+                                    <p className="mt-1 text-slate-600">
+                                      <span className="font-medium text-slate-900">Rejected on:</span>{' '}
+                                      {revision.approved_or_rejected_at
+                                        ? formatDate(revision.approved_or_rejected_at)
+                                        : '—'}
+                                    </p>
+                                    <p className="mt-1 text-slate-600">
+                                      <span className="font-medium text-slate-900">Reason:</span>{' '}
+                                      {revision.decline_reason?.trim() || '—'}
+                                    </p>
+                                  </>
+                                ) : null}
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ) : null}
                 </div>
 
                 <dl className="grid grid-cols-2 gap-3 text-sm">
-                  <DetailField label="Brand" value={listing.brand_name} />
-                  <DetailField label="Model" value={listing.model_name} />
-                  <DetailField label="Storage" value={listing.capacity_gb != null ? `${listing.capacity_gb} GB` : '—'} />
-                  <DetailField label="Color" value={listing.color_name || '—'} />
-                  <DetailField
-                    label="Battery"
-                    value={
-                      listing.battery_percentage != null
-                        ? `${listing.battery_percentage}%`
-                        : '—'
-                    }
-                  />
-                  <DetailField label="Condition" value={listing.condition_name || '—'} />
-                  <DetailField label="Price" value={formatPrice(listing.price)} />
-                  <DetailField label="Location" value={listing.location || '—'} />
+                  {listing.category_slug === 'smartwatches' ? (
+                    <>
+                      <DetailField label="Brand" value={listing.brand_name} />
+                      <DetailField label="Model" value={listing.model_name} />
+                      {listing.case_size_label ? (
+                        <DetailField label="Case Size" value={listing.case_size_label} />
+                      ) : null}
+                      {listing.watch_connectivity_name ? (
+                        <DetailField
+                          label="Connectivity"
+                          value={listing.watch_connectivity_name}
+                        />
+                      ) : null}
+                      {listing.storage_display ? (
+                        <DetailField label="Storage" value={listing.storage_display} />
+                      ) : listing.capacity_gb != null ? (
+                        <DetailField label="Storage" value={`${listing.capacity_gb} GB`} />
+                      ) : null}
+                      {listing.color_display_name || listing.color_name ? (
+                        <DetailField
+                          label="Color / Finish"
+                          value={listing.color_display_name || listing.color_name || '—'}
+                        />
+                      ) : null}
+                      {listing.battery_percentage != null ? (
+                        <DetailField
+                          label="Battery"
+                          value={`${listing.battery_percentage}%`}
+                        />
+                      ) : null}
+                      <DetailField label="Condition" value={listing.condition_name || '—'} />
+                      <DetailField label="Price" value={formatPrice(listing.price)} />
+                      <DetailField label="Location" value={listing.location || '—'} />
+                    </>
+                  ) : (
+                    <>
+                      <DetailField label="Brand" value={listing.brand_name} />
+                      <DetailField label="Model" value={listing.model_name} />
+                      <DetailField label="Storage" value={listing.storage_display || (listing.capacity_gb != null ? `${listing.capacity_gb} GB` : '—')} />
+                      <DetailField label="Color" value={listing.color_name || '—'} />
+                      <DetailField
+                        label="Battery"
+                        value={
+                          listing.battery_percentage != null
+                            ? `${listing.battery_percentage}%`
+                            : '—'
+                        }
+                      />
+                      <DetailField label="Condition" value={listing.condition_name || '—'} />
+                      <DetailField label="Price" value={formatPrice(listing.price)} />
+                      <DetailField label="Location" value={listing.location || '—'} />
+                    </>
+                  )}
                 </dl>
 
                 <div>
@@ -249,29 +522,49 @@ export function ListingDetailDrawer({ listingId, onClose }: ListingDetailDrawerP
             ) : null}
           </div>
 
-          {isPending && listing ? (
-            <div className="flex gap-2 border-t border-slate-200 p-4">
-              <button
-                type="button"
-                onClick={() => {
-                  setActionError(null);
-                  setConfirmAction('approve');
-                }}
-                className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700"
-              >
-                Approve
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setActionError(null);
-                  setDeclineReason('');
-                  setConfirmAction('decline');
-                }}
-                className="flex-1 rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-red-700"
-              >
-                Decline
-              </button>
+          {showModerationActions ? (
+            <div className="flex shrink-0 flex-col gap-2 border-t border-slate-200 bg-white p-4">
+              <div className="flex gap-2">
+                {canApprove ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActionError(null);
+                      setConfirmAction('approve');
+                    }}
+                    className="flex-1 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700"
+                  >
+                    Approve
+                  </button>
+                ) : null}
+                {canDecline ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActionError(null);
+                      setDeclineReason('');
+                      setConfirmAction('decline');
+                    }}
+                    className={`rounded-lg bg-red-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-red-700 ${
+                      canApprove || canDelete ? 'flex-1' : 'w-full'
+                    }`}
+                  >
+                    {status === 'approved' ? 'Decline Listing' : 'Decline'}
+                  </button>
+                ) : null}
+              </div>
+              {canDelete ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActionError(null);
+                    setConfirmAction('delete');
+                  }}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-800 hover:bg-slate-50"
+                >
+                  Delete Listing
+                </button>
+              ) : null}
             </div>
           ) : null}
         </aside>
@@ -292,9 +585,15 @@ export function ListingDetailDrawer({ listingId, onClose }: ListingDetailDrawerP
 
       <ConfirmModal
         open={confirmAction === 'decline'}
-        title="Decline listing?"
-        description="The seller will be notified. A decline reason is required."
-        confirmLabel="Decline"
+        title={
+          status === 'approved' ? 'Decline approved listing?' : 'Decline listing?'
+        }
+        description={
+          status === 'approved'
+            ? 'This listing will be removed from the marketplace immediately. The seller will be notified. A decline reason is required.'
+            : 'The seller will be notified. A decline reason is required.'
+        }
+        confirmLabel={status === 'approved' ? 'Decline Listing' : 'Decline'}
         confirmTone="danger"
         loading={actionLoading}
         error={actionError}
@@ -322,6 +621,23 @@ export function ListingDetailDrawer({ listingId, onClose }: ListingDetailDrawerP
           className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
         />
       </ConfirmModal>
+
+      <ConfirmModal
+        open={confirmAction === 'delete'}
+        title="Delete listing?"
+        description="This listing will be permanently removed from the marketplace and marked as deleted. This cannot be undone from Admin."
+        confirmLabel="Delete Listing"
+        confirmTone="danger"
+        loading={actionLoading}
+        error={actionError}
+        onCancel={() => {
+          if (!actionLoading) setConfirmAction(null);
+        }}
+        onConfirm={() => {
+          setActionError(null);
+          deleteMutation.mutate();
+        }}
+      />
     </>
   );
 }

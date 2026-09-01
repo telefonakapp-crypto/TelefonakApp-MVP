@@ -6,7 +6,7 @@ const pool = require('../config/database');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
 const { toPublicAdmin } = require('../utils/adminAuth');
 const { writeAuditLog } = require('../utils/auditLog');
-const { getJwtSecret } = require('../config/env');
+const { getAdminJwtSecret, ADMIN_JWT_ISS, ADMIN_JWT_AUD } = require('../config/env');
 const { adminLoginLimiter } = require('../middleware/rateLimits');
 
 const router = express.Router();
@@ -21,9 +21,14 @@ function signAdminToken(admin) {
       adminId: admin.id,
       email: admin.email,
       role: admin.role,
+      typ: 'admin',
     },
-    getJwtSecret(),
-    { expiresIn: ADMIN_TOKEN_TTL }
+    getAdminJwtSecret(),
+    {
+      expiresIn: ADMIN_TOKEN_TTL,
+      issuer: ADMIN_JWT_ISS,
+      audience: ADMIN_JWT_AUD,
+    }
   );
 }
 

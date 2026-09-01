@@ -8,6 +8,8 @@ export type MarketplaceUserListItem = {
   is_active: boolean;
   is_verified?: boolean;
   created_at: string;
+  deactivated_at?: string | null;
+  deactivation_reason?: string | null;
   total_listings: number;
 };
 

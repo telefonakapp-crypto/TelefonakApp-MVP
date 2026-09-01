@@ -4,16 +4,21 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Dimensions,
+  Image,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { fonts, ambientElevation, brand, gradients } from '../utils/designTokens';
+import { useLanguage } from '../context/LanguageContext';
+import { getFlexDirection } from '../utils/rtlStyles';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const LOGO = require('../../assets/telefonak-app-icon-v5.png');
 
 export default function AuthChoiceScreen() {
   const navigation = useNavigation();
+  const { t, isRTL, language, changeLanguage } = useLanguage();
 
   const handleLogin = () => {
     navigation.navigate('Login');
@@ -24,62 +29,112 @@ export default function AuthChoiceScreen() {
   };
 
   return (
-    <LinearGradient 
-      colors={['#667eea', '#764ba2']} 
+    <LinearGradient
+      colors={gradients.primary}
       style={styles.container}
     >
-      <View style={styles.content}>
-        {/* Logo/Icon */}
-        <View style={styles.logoContainer}>
-          <View style={styles.logoCircle}>
-            <Ionicons name="phone-portrait" size={80} color="#fff" />
+      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
+        <View style={styles.languageBar} pointerEvents="box-none">
+          <View style={styles.languageTrack}>
+            <TouchableOpacity
+              onPress={() => changeLanguage('en')}
+              accessibilityRole="button"
+              accessibilityState={{ selected: language === 'en' }}
+              style={[
+                styles.languageSegment,
+                language === 'en' && styles.languageSegmentSelected,
+              ]}
+              activeOpacity={0.85}
+            >
+              <Text
+                style={[
+                  styles.languageSegmentText,
+                  language === 'en' && styles.languageSegmentTextSelected,
+                ]}
+              >
+                {t('welcome.languageEnglish')}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => changeLanguage('ar')}
+              accessibilityRole="button"
+              accessibilityState={{ selected: language === 'ar' }}
+              style={[
+                styles.languageSegment,
+                language === 'ar' && styles.languageSegmentSelected,
+              ]}
+              activeOpacity={0.85}
+            >
+              <Text
+                style={[
+                  styles.languageSegmentText,
+                  language === 'ar' && styles.languageSegmentTextSelected,
+                ]}
+              >
+                {t('welcome.languageArabic')}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
 
-        {/* Welcome Text */}
-        <View style={styles.textContainer}>
-          <Text style={styles.title}>Welcome to Telefonak</Text>
-          <Text style={styles.subtitle}>
-            Your trusted marketplace for buying and selling phones
-          </Text>
+        <View style={styles.upper}>
+          <Image
+            source={LOGO}
+            style={styles.logoImage}
+            resizeMode="contain"
+            accessibilityLabel="Telefonak"
+          />
         </View>
 
-        {/* Action Buttons */}
-        <View style={styles.buttonsContainer}>
-          <TouchableOpacity
-            style={styles.loginButton}
-            onPress={handleLogin}
-            activeOpacity={0.8}
-          >
-            <LinearGradient
-              colors={['rgba(255, 255, 255, 0.95)', 'rgba(255, 255, 255, 0.9)']}
-              style={styles.buttonGradient}
+        <View style={styles.lower}>
+          <View style={styles.buttonsContainer}>
+            <TouchableOpacity
+              style={styles.loginButton}
+              onPress={handleLogin}
+              activeOpacity={0.8}
             >
-              <Ionicons name="log-in-outline" size={24} color="#667eea" style={styles.buttonIcon} />
-              <Text style={styles.loginButtonText}>I Have an Account</Text>
-            </LinearGradient>
-          </TouchableOpacity>
+              <LinearGradient
+                colors={['rgba(255, 255, 255, 0.95)', 'rgba(255, 255, 255, 0.9)']}
+                style={[styles.buttonGradient, getFlexDirection(isRTL, 'row')]}
+              >
+                <Ionicons
+                  name="log-in-outline"
+                  size={24}
+                  color={brand.primary}
+                  style={[
+                    styles.buttonIcon,
+                    isRTL ? { marginRight: 0, marginLeft: 12 } : null,
+                  ]}
+                />
+                <Text style={styles.loginButtonText}>{t('welcome.haveAccount')}</Text>
+              </LinearGradient>
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.signupButton}
-            onPress={handleSignUp}
-            activeOpacity={0.8}
-          >
-            <View style={styles.signupButtonContent}>
-              <Ionicons name="person-add-outline" size={24} color="#fff" style={styles.buttonIcon} />
-              <Text style={styles.signupButtonText}>Sign Up</Text>
-            </View>
-          </TouchableOpacity>
-        </View>
+            <TouchableOpacity
+              style={styles.signupButton}
+              onPress={handleSignUp}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.signupButtonContent, getFlexDirection(isRTL, 'row')]}>
+                <Ionicons
+                  name="person-add-outline"
+                  size={24}
+                  color="#fff"
+                  style={[
+                    styles.buttonIcon,
+                    isRTL ? { marginRight: 0, marginLeft: 12 } : null,
+                  ]}
+                />
+                <Text style={styles.signupButtonText}>{t('welcome.signUp')}</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
 
-        {/* Footer */}
-        <View style={styles.footer}>
-          <Text style={styles.footerText}>
-            By continuing, you agree to our Terms of Service
-          </Text>
-          <Text style={styles.footerText}>and Privacy Policy</Text>
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>{t('welcome.terms')}</Text>
+          </View>
         </View>
-      </View>
+      </SafeAreaView>
     </LinearGradient>
   );
 }
@@ -88,59 +143,68 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  content: {
+  safeArea: {
     flex: 1,
-    justifyContent: 'space-between',
-    paddingHorizontal: 30,
-    paddingTop: 80,
-    paddingBottom: 50,
   },
-  logoContainer: {
+  languageBar: {
+    alignItems: 'flex-end',
+    paddingTop: 6,
+    paddingRight: 16,
+  },
+  languageTrack: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 40,
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    padding: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  logoCircle: {
-    width: 160,
-    height: 160,
-    borderRadius: 80,
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  languageSegment: {
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+    borderRadius: 18,
+  },
+  languageSegmentSelected: {
+    backgroundColor: brand.primary,
+  },
+  languageSegmentText: {
+    fontFamily: fonts.label,
+    fontSize: 14,
+    color: '#1a1c1c',
+    textDecorationLine: 'none',
+  },
+  languageSegmentTextSelected: {
+    color: '#ffffff',
+    fontFamily: fonts.labelBold,
+    textDecorationLine: 'none',
+  },
+  upper: {
+    flex: 1,
+    alignItems: 'center',
     justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 3,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    paddingHorizontal: 30,
   },
-  textContainer: {
-    alignItems: 'center',
-    marginTop: 40,
-    marginBottom: 60,
+  logoImage: {
+    width: 176,
+    height: 176,
+    borderRadius: 36,
   },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#ffffff',
-    textAlign: 'center',
-    marginBottom: 16,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: '#ffffff',
-    textAlign: 'center',
-    opacity: 0.9,
-    lineHeight: 24,
-    paddingHorizontal: 20,
+  lower: {
+    paddingHorizontal: 30,
+    paddingBottom: 12,
   },
   buttonsContainer: {
     width: '100%',
-    gap: 16,
+    gap: 14,
   },
   loginButton: {
-    borderRadius: 16,
+    borderRadius: 12,
     overflow: 'hidden',
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    ...ambientElevation,
   },
   buttonGradient: {
     paddingVertical: 18,
@@ -148,13 +212,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 16,
+    borderRadius: 12,
   },
   signupButton: {
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: 'rgba(255, 255, 255, 0.5)',
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    borderWidth: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
     paddingVertical: 18,
     paddingHorizontal: 24,
   },
@@ -167,20 +230,22 @@ const styles = StyleSheet.create({
     marginRight: 12,
   },
   loginButtonText: {
+    fontFamily: fonts.labelBold,
     fontSize: 18,
-    fontWeight: '600',
-    color: '#667eea',
+    color: brand.primary,
   },
   signupButtonText: {
+    fontFamily: fonts.labelBold,
     fontSize: 18,
-    fontWeight: '600',
     color: '#ffffff',
   },
   footer: {
     alignItems: 'center',
-    marginTop: 20,
+    marginTop: 28,
+    paddingHorizontal: 8,
   },
   footerText: {
+    fontFamily: fonts.body,
     fontSize: 12,
     color: '#ffffff',
     opacity: 0.7,
@@ -188,4 +253,3 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 });
-

@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   Switch,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,16 +13,14 @@ import { useNavigation } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
-import { useFavorites } from '../context/FavoritesContext';
-import { useNotifications } from '../context/NotificationsContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
+import { fonts, radii, space, ambientElevation } from '../utils/designTokens';
+import { IconButton } from '../components/ui';
 
 export default function SettingsScreen() {
   const navigation = useNavigation();
   const { colors, isDarkMode, toggleTheme } = useTheme();
   const { language, changeLanguage, t, isRTL } = useLanguage();
-  const { clearFavorites } = useFavorites();
-  const { clearUnreadCount } = useNotifications();
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(true);
 
   React.useEffect(() => {
@@ -51,56 +48,26 @@ export default function SettingsScreen() {
     }
   };
 
-  const handleLogout = async () => {
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to logout?',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-        {
-          text: 'Logout',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await AsyncStorage.removeItem('authToken');
-              await AsyncStorage.removeItem('hasSeenOnboarding');
-              clearFavorites();
-              clearUnreadCount();
-              navigation.reset({
-                index: 0,
-                routes: [{ name: 'AuthChoice' }],
-              });
-            } catch (error) {
-              console.error('Logout error:', error);
-              Alert.alert('Error', 'Failed to logout. Please try again.');
-            }
-          },
-        },
-      ]
-    );
-  };
-
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
-      <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}>
-        <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name={isRTL ? "arrow-forward" : "arrow-back"} size={24} color={colors.text} />
-        </TouchableOpacity>
+      <View style={[styles.header, getFlexDirection(isRTL, 'row')]}>
+        <IconButton
+          name={isRTL ? 'arrow-forward' : 'arrow-back'}
+          onPress={() => navigation.goBack()}
+          accessibilityLabel={t('common.back')}
+        />
         <Text style={[styles.headerTitle, { color: colors.text }, getTextAlign(isRTL, 'center')]}>{t('settings.settings')}</Text>
-        <View style={{ width: 24 }} />
+        <View style={styles.headerSpacer} />
       </View>
 
       <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{t('settings.preferences')}</Text>
           
-          <View style={[styles.settingItem, { backgroundColor: colors.surface }, getFlexDirection(isRTL, 'row')]}>
+          <View style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}>
             <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
               <Ionicons name="notifications-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }} />
-              <View style={styles.settingText}>
+              <View style={[styles.settingText, { marginLeft: isRTL ? 0 : space[3], marginRight: isRTL ? space[3] : 0 }]}>
                 <Text style={[styles.settingLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('settings.pushNotifications')}</Text>
                 <Text style={[styles.settingDescription, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>{t('settings.pushNotificationsDesc')}</Text>
               </View>
@@ -113,10 +80,10 @@ export default function SettingsScreen() {
             />
           </View>
 
-          <View style={[styles.settingItem, { backgroundColor: colors.surface }, getFlexDirection(isRTL, 'row')]}>
+          <View style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}>
             <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
               <Ionicons name={isDarkMode ? "moon" : "sunny-outline"} size={24} color={colors.text} />
-              <View style={styles.settingText}>
+              <View style={[styles.settingText, { marginLeft: isRTL ? 0 : space[3], marginRight: isRTL ? space[3] : 0 }]}>
                 <Text style={[styles.settingLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('settings.darkMode')}</Text>
                 <Text style={[styles.settingDescription, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>
                   {isDarkMode ? t('settings.lightModeDesc') : t('settings.darkModeDesc')}
@@ -131,10 +98,10 @@ export default function SettingsScreen() {
             />
           </View>
 
-          <View style={[styles.settingItem, { backgroundColor: colors.surface }, getFlexDirection(isRTL, 'row')]}>
+          <View style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}>
             <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
               <Ionicons name="language-outline" size={24} color={colors.text} />
-              <View style={styles.settingText}>
+              <View style={[styles.settingText, { marginLeft: isRTL ? 0 : space[3], marginRight: isRTL ? space[3] : 0 }]}>
                 <Text style={[styles.settingLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('settings.language')}</Text>
                 <Text style={[styles.settingDescription, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>
                   {language === 'en' ? 'English' : 'العربية'}
@@ -176,7 +143,7 @@ export default function SettingsScreen() {
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{t('settings.account')}</Text>
           
           <TouchableOpacity
-            style={[styles.settingItem, { backgroundColor: colors.surface }, getFlexDirection(isRTL, 'row')]}
+            style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}
             onPress={() => navigation.navigate('EditProfile')}
           >
             <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
@@ -187,7 +154,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.settingItem, { backgroundColor: colors.surface }, getFlexDirection(isRTL, 'row')]}
+            style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}
             onPress={() => navigation.navigate('MyListings')}
           >
             <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
@@ -201,19 +168,43 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>{t('settings.about')}</Text>
           
-          <View style={[styles.settingItem, { backgroundColor: colors.surface }, getFlexDirection(isRTL, 'row')]}>
+          <View style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}>
             <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
               <Ionicons name="information-circle-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }} />
-              <View style={styles.settingText}>
+              <View style={[styles.settingText, { marginLeft: isRTL ? 0 : space[3], marginRight: isRTL ? space[3] : 0 }]}>
                 <Text style={[styles.settingLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>App Version</Text>
                 <Text style={[styles.settingDescription, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>1.0.0</Text>
               </View>
             </View>
           </View>
 
+          {__DEV__ ? (
+            <TouchableOpacity
+              style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}
+              onPress={() => navigation.navigate('ImagePickerDiagnostic')}
+              accessibilityRole="button"
+              accessibilityLabel="ImagePicker Diagnostic"
+            >
+              <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
+                <Ionicons
+                  name="bug-outline"
+                  size={24}
+                  color={colors.text}
+                  style={{ marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }}
+                />
+                <Text style={[styles.settingLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+                  ImagePicker Diagnostic
+                </Text>
+              </View>
+              <Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={20} color={colors.textSecondary} />
+            </TouchableOpacity>
+          ) : null}
+
           <TouchableOpacity
-            style={[styles.settingItem, { backgroundColor: colors.surface }]}
-            onPress={() => Alert.alert('Help', 'For support, please contact us at support@telefonak.com')}
+            style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}
+            onPress={() => navigation.navigate('ContactUs')}
+            accessibilityRole="button"
+            accessibilityLabel={t('settings.helpSupport')}
           >
             <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
               <Ionicons name="help-circle-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }} />
@@ -223,8 +214,8 @@ export default function SettingsScreen() {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.settingItem, { backgroundColor: colors.surface }]}
-            onPress={() => Alert.alert('Privacy Policy', 'Privacy policy content goes here')}
+            style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}
+            onPress={() => navigation.navigate('PrivacyPolicy')}
           >
             <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
               <Ionicons name="shield-checkmark-outline" size={24} color={colors.text} style={{ marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }} />
@@ -232,15 +223,27 @@ export default function SettingsScreen() {
             </View>
             <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
           </TouchableOpacity>
-        </View>
 
-        <TouchableOpacity 
-          style={[styles.logoutButton, { backgroundColor: colors.surface, borderColor: isDarkMode ? '#7f1d1d' : '#fee2e2' }, getFlexDirection(isRTL, 'row')]} 
-          onPress={handleLogout}
-        >
-          <Ionicons name="log-out-outline" size={24} color={colors.error} />
-          <Text style={[styles.logoutButtonText, { color: colors.error }, getTextAlign(isRTL, 'center')]}>{t('common.logout')}</Text>
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}
+            onPress={() => navigation.navigate('DeleteAccount')}
+            accessibilityRole="button"
+            accessibilityLabel={t('settings.deleteAccount')}
+          >
+            <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
+              <Ionicons
+                name="trash-outline"
+                size={24}
+                color={colors.error}
+                style={{ marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }}
+              />
+              <Text style={[styles.settingLabel, { color: colors.error }, getTextAlign(isRTL, 'auto')]}>
+                {t('settings.deleteAccount')}
+              </Text>
+            </View>
+            <Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={20} color={colors.error} />
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -253,37 +256,43 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 16,
-    borderBottomWidth: 1,
+    paddingHorizontal: space[2],
+    paddingVertical: space[1],
   },
   headerTitle: {
+    flex: 1,
+    fontFamily: fonts.headline,
     fontSize: 18,
-    fontWeight: '600',
+    textAlign: 'center',
   },
+  headerSpacer: { width: 44 },
   content: {
     flex: 1,
   },
   contentContainer: {
-    padding: 16,
+    paddingHorizontal: space[5],
+    paddingTop: space[4],
+    paddingBottom: space[8],
   },
   section: {
-    marginBottom: 24,
+    marginBottom: space[5],
   },
   sectionTitle: {
-    fontSize: 14,
-    fontWeight: '600',
+    fontFamily: fonts.labelBold,
+    fontSize: 13,
     textTransform: 'uppercase',
-    marginBottom: 12,
-    paddingHorizontal: 4,
+    letterSpacing: 0.4,
+    marginBottom: space[2],
+    paddingHorizontal: space[1],
   },
   settingItem: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 8,
+    minHeight: 64,
+    padding: space[4],
+    borderRadius: radii['2xl'],
+    marginBottom: space[3],
   },
   settingInfo: {
     flexDirection: 'row',
@@ -291,30 +300,16 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   settingText: {
-    marginLeft: 12,
     flex: 1,
   },
   settingLabel: {
+    fontFamily: fonts.bodyMedium,
     fontSize: 16,
-    fontWeight: '500',
   },
   settingDescription: {
+    fontFamily: fonts.body,
     fontSize: 12,
-    marginTop: 2,
-  },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-    borderRadius: 12,
-    marginTop: 16,
-    borderWidth: 1,
-  },
-  logoutButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginLeft: 8,
+    marginTop: space[1],
   },
   languageButtons: {
     flexDirection: 'row',
@@ -323,7 +318,7 @@ const styles = StyleSheet.create({
   languageButton: {
     paddingHorizontal: 16,
     paddingVertical: 8,
-    borderRadius: 8,
+    borderRadius: radii.xl,
     minWidth: 50,
     alignItems: 'center',
   },
@@ -331,8 +326,8 @@ const styles = StyleSheet.create({
     // Already handled by backgroundColor
   },
   languageButtonText: {
+    fontFamily: fonts.labelBold,
     fontSize: 14,
-    fontWeight: '600',
   },
 });
 

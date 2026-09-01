@@ -6,9 +6,7 @@ import {
   FlatList,
   Image,
   TouchableOpacity,
-  ActivityIndicator,
   RefreshControl,
-  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -17,22 +15,46 @@ import apiClient, { resolveMediaUrl } from '../utils/api';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
+import { openPhoneDialer } from '../utils/phoneDialer';
 import OfferStatusBadge from '../components/OfferStatusBadge';
+import { ignoreIfMaintenance } from '../utils/maintenance';
+import { fonts, radii, space } from '../utils/designTokens';
+import { getListingDisplayName } from '../utils/listingDisplayName';
+import {
+  Button,
+  Card,
+  EmptyState,
+  HorizontalCardSkeleton,
+  IconButton,
+} from '../components/ui';
 
-export default function MyOffersScreen() {
+function formatOfferDate(value) {
+  if (!value) return '—';
+  return new Date(value).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+export default function MyOffersScreen({ embedded = false }) {
   const navigation = useNavigation();
   const { colors } = useTheme();
   const { t, isRTL } = useLanguage();
   const [offers, setOffers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   const fetchOffers = useCallback(async () => {
     try {
+      setLoadError(false);
       const response = await apiClient.get('/offers/sent');
       setOffers(response.data.offers || []);
     } catch (error) {
+      if (ignoreIfMaintenance(error)) return;
       console.error('Error fetching sent offers:', error.response?.data || error.message);
+      setLoadError(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -50,143 +72,212 @@ export default function MyOffersScreen() {
     fetchOffers();
   };
 
+  const retryOffers = () => {
+    setLoading(true);
+    fetchOffers();
+  };
+
   const renderItem = ({ item }) => (
-    <View style={[styles.card, { backgroundColor: colors.surface }]}>
+    <Card style={styles.card} padded={false} elevated>
       {/* A sold or hidden listing is no longer readable by the buyer, so the
           offer stays as history but the row does not lead to a dead end. */}
       <TouchableOpacity
-        style={[styles.cardTop, getFlexDirection(isRTL, 'row')]}
+        style={styles.cardTop}
         onPress={() => navigation.navigate('ListingDetails', { listingId: item.listing_id })}
         disabled={item.listing_status !== 'approved'}
-        activeOpacity={0.8}
+        activeOpacity={0.86}
       >
-        {item.thumbnail_image ? (
-          <Image source={{ uri: resolveMediaUrl(item.thumbnail_image) }} style={styles.thumbnail} />
-        ) : (
-          <View style={[styles.thumbnail, { backgroundColor: colors.inputBackground }]}>
-            <Ionicons name="image-outline" size={22} color={colors.textSecondary} />
-          </View>
-        )}
+        <View style={[styles.identityRow, getFlexDirection(isRTL, 'row')]}>
+          {item.thumbnail_image ? (
+            <Image
+              source={{ uri: resolveMediaUrl(item.thumbnail_image) }}
+              style={styles.thumbnail}
+            />
+          ) : (
+            <View
+              style={[
+                styles.thumbnail,
+                styles.thumbnailPlaceholder,
+                { backgroundColor: colors.surfaceContainerLow },
+              ]}
+            >
+              <Ionicons name="image-outline" size={28} color={colors.textMuted} />
+            </View>
+          )}
 
-        <View style={[styles.info, { marginLeft: isRTL ? 0 : 12, marginRight: isRTL ? 12 : 0 }]}>
-          <Text style={[styles.listingTitle, { color: colors.text }, getTextAlign(isRTL, 'auto')]} numberOfLines={1}>
-            {item.brand_name} {item.model_name}
-          </Text>
-          <Text style={[styles.offerPrice, { color: colors.primary }, getTextAlign(isRTL, 'auto')]}>
-            {item.offered_price} JOD
-            <Text style={[styles.askingPrice, { color: colors.textSecondary }]}>
-              {'  '}({t('offers.asking')} {item.listing_price} JOD)
+          <View
+            style={[
+              styles.info,
+              {
+                marginLeft: isRTL ? 0 : space[3],
+                marginRight: isRTL ? space[3] : 0,
+              },
+            ]}
+          >
+            <Text
+              style={[
+                styles.listingTitle,
+                { color: colors.text },
+                getTextAlign(isRTL, 'auto'),
+              ]}
+              numberOfLines={2}
+            >
+              {getListingDisplayName(item.brand_name, item.model_name)}
             </Text>
-          </Text>
-          <View style={[styles.metaRow, getFlexDirection(isRTL, 'row')]}>
-            <OfferStatusBadge status={item.status} />
-            <Text style={[styles.date, { color: colors.textSecondary, marginLeft: isRTL ? 0 : 8, marginRight: isRTL ? 8 : 0 }]}>
-              {new Date(item.created_at).toLocaleDateString()}
+            <Text style={[styles.amountLabel, { color: colors.textSecondary }]}>
+              {t('offers.yourOffer')}
+            </Text>
+            <Text
+              style={[
+                styles.offerPrice,
+                { color: colors.primary },
+                getTextAlign(isRTL, 'auto'),
+              ]}
+            >
+              {item.offered_price} JOD
+            </Text>
+            <Text
+              style={[
+                styles.askingPrice,
+                { color: colors.textSecondary },
+                getTextAlign(isRTL, 'auto'),
+              ]}
+            >
+              {t('offers.askingPriceIs')} {item.listing_price} JOD
             </Text>
           </View>
+        </View>
+
+        <View style={[styles.metaRow, getFlexDirection(isRTL, 'row')]}>
+          <OfferStatusBadge status={item.status} />
+          <Text style={[styles.date, { color: colors.textMuted }]}>
+            {formatOfferDate(item.created_at)}
+          </Text>
         </View>
       </TouchableOpacity>
 
       {/* The API only returns the seller's number for accepted offers */}
       {item.status === 'accepted' && !!item.seller_phone_number && (
-        <View style={[styles.actions, { borderTopColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}>
-          <TouchableOpacity
-            style={[styles.callButton, getFlexDirection(isRTL, 'row')]}
-            onPress={() => Linking.openURL(`tel:${item.seller_phone_number}`)}
-          >
-            <Ionicons name="call" size={18} color="#ffffff" style={{ marginRight: isRTL ? 0 : 6, marginLeft: isRTL ? 6 : 0 }} />
-            <Text style={styles.callText}>{t('offers.callSeller')}</Text>
-          </TouchableOpacity>
-        </View>
+        <>
+          <View style={[styles.divider, { backgroundColor: colors.border }]} />
+          <View style={styles.actions}>
+          <Button
+            label={t('offers.callSeller')}
+            onPress={() =>
+              openPhoneDialer(item.seller_phone_number, {
+                unavailableMessage: t('common.sellerPhoneUnavailable'),
+                dialerUnavailableMessage: t('common.phoneDialerUnavailable'),
+              })
+            }
+            style={styles.callButton}
+          />
+          </View>
+        </>
       )}
-    </View>
+    </Card>
   );
+
+  const listBody = loading ? (
+    <View style={styles.skeletonList}>
+      {Array.from({ length: 3 }).map((_, index) => (
+        <HorizontalCardSkeleton key={index} action={index === 0} />
+      ))}
+    </View>
+  ) : loadError && offers.length === 0 ? (
+    <EmptyState
+      icon="cloud-offline-outline"
+      title={t('common.error')}
+      description={t('common.somethingWentWrong')}
+      actionLabel={t('common.retry')}
+      onAction={retryOffers}
+      style={styles.errorState}
+    />
+  ) : (
+    <FlatList
+      data={offers}
+      keyExtractor={(item) => String(item.id)}
+      renderItem={renderItem}
+      contentContainerStyle={styles.listContent}
+      ItemSeparatorComponent={() => <View style={{ height: space[3] }} />}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+      }
+      ListEmptyComponent={
+        <EmptyState
+          icon="pricetag-outline"
+          title={t('offers.noSentOffers')}
+          description={t('offers.noSentOffersDesc')}
+        />
+      }
+    />
+  );
+
+  if (embedded) {
+    return <View style={[styles.container, { backgroundColor: colors.background }]}>{listBody}</View>;
+  }
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
-      <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.borderLight }, getFlexDirection(isRTL, 'row')]}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerLeft}>
-          <Ionicons name={isRTL ? 'arrow-forward' : 'arrow-back'} size={24} color={colors.text} />
-        </TouchableOpacity>
+      <View style={[styles.header, getFlexDirection(isRTL, 'row')]}>
+        <IconButton
+          name={isRTL ? 'arrow-forward' : 'arrow-back'}
+          onPress={() => navigation.goBack()}
+        />
         <Text style={[styles.headerTitle, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
           {t('offers.myOffers')}
         </Text>
+        <View style={styles.headerSpacer} />
       </View>
 
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
-        </View>
-      ) : (
-        <FlatList
-          data={offers}
-          keyExtractor={(item) => String(item.id)}
-          renderItem={renderItem}
-          contentContainerStyle={styles.listContent}
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
-          }
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Ionicons name="pricetag-outline" size={56} color={colors.textSecondary} />
-              <Text style={[styles.emptyTitle, { color: colors.text }, getTextAlign(isRTL, 'center')]}>
-                {t('offers.noSentOffers')}
-              </Text>
-              <Text style={[styles.emptySubtitle, { color: colors.textSecondary }, getTextAlign(isRTL, 'center')]}>
-                {t('offers.noSentOffersDesc')}
-              </Text>
-            </View>
-          }
-        />
-      )}
+      {listBody}
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
+  container: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 24,
-    borderBottomWidth: 1,
-  },
-  headerLeft: {
-    width: 40,
-    alignItems: 'flex-start',
+    paddingHorizontal: space[2],
+    paddingVertical: space[1],
   },
   headerTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  loadingContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+    fontFamily: fonts.headline,
+    fontSize: 18,
+    textAlign: 'center',
+  },
+  headerSpacer: { width: 44 },
+  skeletonList: {
+    paddingHorizontal: space[5],
+    paddingTop: space[3],
+    gap: space[3],
+  },
+  errorState: {
+    flex: 1,
   },
   listContent: {
-    padding: 16,
+    paddingHorizontal: space[5],
+    paddingTop: space[3],
+    paddingBottom: space[8],
     flexGrow: 1,
   },
   card: {
-    borderRadius: 12,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 1,
+    borderRadius: radii['2xl'] + 4,
   },
   cardTop: {
-    flexDirection: 'row',
-    padding: 12,
+    padding: space[4],
+  },
+  identityRow: {
+    alignItems: 'flex-start',
   },
   thumbnail: {
-    width: 64,
-    height: 64,
-    borderRadius: 8,
+    width: 96,
+    height: 96,
+    borderRadius: radii['2xl'],
+  },
+  thumbnailPlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -194,60 +285,46 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   listingTitle: {
-    fontSize: 15,
-    fontWeight: '600',
+    fontFamily: fonts.headline,
+    fontSize: 16,
+    lineHeight: 21,
+  },
+  amountLabel: {
+    fontFamily: fonts.label,
+    fontSize: 11,
+    marginTop: space[2],
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   offerPrice: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    marginTop: 4,
+    fontFamily: fonts.display,
+    fontSize: 23,
+    lineHeight: 28,
   },
   askingPrice: {
+    fontFamily: fonts.body,
     fontSize: 12,
-    fontWeight: '400',
+    marginTop: 2,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 6,
+    justifyContent: 'space-between',
+    marginTop: space[3],
   },
   date: {
-    fontSize: 11,
+    fontFamily: fonts.label,
+    fontSize: 12,
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    marginHorizontal: space[4],
   },
   actions: {
-    flexDirection: 'row',
-    borderTopWidth: 1,
-    padding: 8,
+    paddingHorizontal: space[4],
+    paddingVertical: space[3],
   },
   callButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: '#22c55e',
-  },
-  callText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  emptyContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-    paddingTop: 80,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    marginTop: 16,
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    marginTop: 8,
-    lineHeight: 20,
+    minHeight: 46,
   },
 });

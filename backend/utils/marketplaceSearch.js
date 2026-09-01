@@ -38,9 +38,12 @@ function buildMarketplaceSearchClause(normalizedSearch, pushParam) {
   const idx = pushParam(pattern);
 
   return `(
-    unaccent(b.name) ILIKE unaccent($${idx}::text) OR
-    unaccent(m.name) ILIKE unaccent($${idx}::text) OR
-    unaccent(b.name || ' ' || m.name) ILIKE unaccent($${idx}::text)
+    unaccent(COALESCE(b.name, '')) ILIKE unaccent($${idx}::text) OR
+    unaccent(COALESCE(m.name, '')) ILIKE unaccent($${idx}::text) OR
+    unaccent(COALESCE(b.name, '') || ' ' || COALESCE(m.name, '')) ILIKE unaccent($${idx}::text) OR
+    unaccent(COALESCE(l.custom_brand_name, '')) ILIKE unaccent($${idx}::text) OR
+    unaccent(COALESCE(l.custom_model_name, '')) ILIKE unaccent($${idx}::text) OR
+    unaccent(COALESCE(l.custom_brand_name, '') || ' ' || COALESCE(l.custom_model_name, '')) ILIKE unaccent($${idx}::text)
   )`;
 }
 

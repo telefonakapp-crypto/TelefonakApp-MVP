@@ -70,19 +70,10 @@ BEGIN
             (xiaomi_brand_id, 'Xiaomi 13 Pro', 2023, 'Snapdragon 8 Gen 2', 6.73),
             (xiaomi_brand_id, 'Xiaomi 13', 2023, 'Snapdragon 8 Gen 2', 6.36),
             (xiaomi_brand_id, 'Xiaomi 12 Pro', 2022, 'Snapdragon 8 Gen 1', 6.73),
-            (xiaomi_brand_id, 'Xiaomi 12', 2022, 'Snapdragon 8 Gen 1', 6.28),
-            -- Redmi Series
-            (xiaomi_brand_id, 'Redmi Note 13 Pro', 2024, 'Snapdragon 7s Gen 2', 6.67),
-            (xiaomi_brand_id, 'Redmi Note 13', 2024, 'MediaTek Helio G99', 6.67),
-            (xiaomi_brand_id, 'Redmi Note 12 Pro', 2023, 'MediaTek Dimensity 1080', 6.67),
-            (xiaomi_brand_id, 'Redmi Note 12', 2023, 'Snapdragon 685', 6.67),
-            (xiaomi_brand_id, 'Redmi Note 11', 2022, 'Snapdragon 680', 6.43),
-            (xiaomi_brand_id, 'Redmi 13', 2024, 'MediaTek Helio G91-Ultra', 6.79),
-            (xiaomi_brand_id, 'Redmi 12', 2023, 'MediaTek Helio G88', 6.79),
-            -- POCO Series
-            (xiaomi_brand_id, 'POCO X6 Pro', 2024, 'MediaTek Dimensity 8300 Ultra', 6.67),
-            (xiaomi_brand_id, 'POCO F5', 2023, 'Snapdragon 7+ Gen 2', 6.67),
-            (xiaomi_brand_id, 'POCO X5 Pro', 2023, 'Snapdragon 778G', 6.67)
+            (xiaomi_brand_id, 'Xiaomi 12', 2022, 'Snapdragon 8 Gen 1', 6.28)
+            -- Redmi / POCO live on their own brands in phone_catalog_seed.sql.
+            -- Do not re-insert them under Xiaomi on every init (unique (brand_id, name)
+            -- would recreate Xiaomi copies after they were moved to Redmi/POCO).
         ON CONFLICT (brand_id, name) DO NOTHING;
     END IF;
 END $$;

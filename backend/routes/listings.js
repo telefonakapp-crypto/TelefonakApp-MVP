@@ -1,19 +1,17 @@
 const express = require('express');
 const router = express.Router();
-const path = require('path');
-const fs = require('fs');
 const pool = require('../config/database');
 const { body, validationResult } = require('express-validator');
-const {
-  normalizeMarketplaceSearch,
-  buildMarketplaceSearchClause,
-} = require('../utils/marketplaceSearch');
 const { recordListingView, resolveClientIp } = require('../utils/listingViews');
 const {
   getListingDeviceName,
   notifyListingSold,
   notifyListingHidden,
   notifyListingActive,
+  notifyListingLive,
+  notifyListingSubmitted,
+  notifyListingResubmitted,
+  notifyListingUpdated,
   notifyAdminsOfNewListing,
 } = require('../utils/notifications');
 const {
@@ -22,7 +20,32 @@ const {
   TERMINAL_LISTING_STATUSES,
   isPublicListingStatus,
   isTerminalListingStatus,
+  resolveListingModerationStatus,
+  resolveSellerEditNextStatus,
 } = require('../utils/listingStatus');
+const { resolveBaseUrl } = require('../utils/baseUrl');
+const {
+  deleteLocalListingImageFile,
+  copyLocalListingImageFile,
+  recordListingImageUpload,
+  validateListingImageUrls,
+  listingImageFilename,
+} = require('../utils/listingImageAuth');
+const {
+  validateListingIdentityAttributes,
+  formatListingDeviceName,
+} = require('../utils/listingCustom');
+const {
+  fetchMarketplaceListings,
+  fetchOwnerMyListings,
+  fetchListingRowById,
+  fetchListingRowAfterWrite,
+} = require('../utils/listingQueries');
+const {
+  recordListingModerationEvent,
+  freezeCurrentListingRevision,
+  EVENT_TYPE,
+} = require('../utils/listingModerationEvents');
 
 const MAX_LISTING_IMAGES = 10;
 
@@ -65,28 +88,6 @@ async function resolveLegacyStorageId(modelStorageId) {
 // that can reach someone other than the listing owner.
 const withoutViewCount = ({ views, ...listing }) => listing;
 
-// Best-effort deletion of a locally stored listing image file
-const deleteLocalListingImageFile = (imageUrl) => {
-  try {
-    if (!imageUrl || typeof imageUrl !== 'string') return;
-    let pathname = imageUrl;
-    try {
-      pathname = new URL(imageUrl).pathname;
-    } catch {
-      // Relative paths like /uploads/... are fine as-is
-    }
-    const filename = path.basename(pathname);
-    // Only delete files we created for listings (never touch ad images or arbitrary paths)
-    if (!filename.startsWith('listing-')) return;
-    const filePath = path.join(__dirname, '../uploads', filename);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-    }
-  } catch (err) {
-    console.warn('Could not delete listing image file:', err.message);
-  }
-};
-
 // Middleware to verify JWT token (rejects disabled marketplace accounts)
 const verifyToken = require('../middleware/verifyToken');
 
@@ -96,10 +97,10 @@ const optionalAuth = (req, res, next) => {
 
   if (token) {
     try {
-      const jwt = require('jsonwebtoken');
-      const decoded = jwt.verify(token, require('../config/env').getJwtSecret());
+      const { verifyCustomerToken } = require('../utils/customerAuth');
+      const decoded = verifyCustomerToken(token);
       // Ignore Admin Web staff tokens on customer listing routes.
-      if (!decoded.adminId) {
+      if (!decoded.adminId && decoded.typ !== 'admin') {
         req.user = decoded;
       }
     } catch (error) {
@@ -115,138 +116,31 @@ const optionalAuth = (req, res, next) => {
  * staff moderation uses Admin Web APIs under /api/admin/listings.
  */
 
-// Get all brands (optional ?category_id — only brands with models in that category)
-router.get('/brands', async (req, res) => {
-  try {
-    const { category_id } = req.query;
-    let result;
-
-    if (category_id && String(category_id).trim()) {
-      const categoryId = parseInt(category_id, 10);
-      if (!Number.isInteger(categoryId) || categoryId <= 0) {
-        return res.status(400).json({ error: 'Invalid category ID' });
-      }
-      result = await pool.query(
-        `SELECT DISTINCT b.*
-         FROM brands b
-         JOIN models m ON m.brand_id = b.id
-         WHERE m.category_id = $1
-         ORDER BY b.name`,
-        [categoryId]
-      );
-    } else {
-      result = await pool.query('SELECT * FROM brands ORDER BY name');
-    }
-
-    res.json({ brands: result.rows });
-  } catch (error) {
-    console.error('Error fetching brands:', error);
-    res.status(500).json({ error: 'Failed to fetch brands' });
-  }
-});
-
-// Get models by brand (optional ?category_id filter)
-router.get('/brands/:brandId/models', async (req, res) => {
-  try {
-    const brandId = parseInt(req.params.brandId, 10);
-    if (!Number.isInteger(brandId) || brandId <= 0) {
-      return res.status(400).json({ error: 'Invalid brand ID' });
-    }
-    const { category_id } = req.query;
-
-    let query  = 'SELECT * FROM models WHERE brand_id = $1';
-    const params = [brandId];
-
-    // Filter by category when provided, but still return models that have no
-    // category yet so existing brands remain selectable during the transition.
-    if (category_id && category_id.trim()) {
-      query += ' AND (category_id = $2 OR category_id IS NULL)';
-      params.push(parseInt(category_id));
-    }
-
-    query += ' ORDER BY release_year DESC, name';
-
-    const result = await pool.query(query, params);
-    res.json({ models: result.rows });
-  } catch (error) {
-    console.error('Error fetching models:', error);
-    res.status(500).json({ error: 'Failed to fetch models' });
-  }
-});
-
-// Get storage options
-router.get('/storage', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM storage_options ORDER BY capacity_gb');
-    res.json({ storage: result.rows });
-  } catch (error) {
-    console.error('Error fetching storage:', error);
-    res.status(500).json({ error: 'Failed to fetch storage options' });
-  }
-});
-
-// Get conditions
-router.get('/conditions', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT * FROM conditions ORDER BY id');
-    res.json({ conditions: result.rows });
-  } catch (error) {
-    console.error('Error fetching conditions:', error);
-    res.status(500).json({ error: 'Failed to fetch conditions' });
-  }
-});
-
-// Get cities
-router.get('/cities', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT id, slug, name_en, name_ar, sort_order
-       FROM cities
-       WHERE is_active = TRUE
-       ORDER BY sort_order, name_en`
-    );
-    res.json({ cities: result.rows });
-  } catch (error) {
-    console.error('Error fetching cities:', error);
-    res.status(500).json({ error: 'Failed to fetch cities' });
-  }
-});
-
-// Get areas for a city
-router.get('/cities/:cityId/areas', async (req, res) => {
-  try {
-    const cityId = parseInt(req.params.cityId, 10);
-    if (!Number.isInteger(cityId) || cityId <= 0) {
-      return res.status(400).json({ error: 'Invalid city ID' });
-    }
-    const result = await pool.query(
-      `SELECT id, city_id, slug, name_en, name_ar, sort_order
-       FROM areas
-       WHERE city_id = $1 AND is_active = TRUE
-       ORDER BY sort_order, name_en`,
-      [cityId]
-    );
-    res.json({ areas: result.rows });
-  } catch (error) {
-    console.error('Error fetching areas:', error);
-    res.status(500).json({ error: 'Failed to fetch areas' });
-  }
-});
-
-// Create listing (status defaults to 'pending' for admin approval)
+// Create listing — status from live `auto_approve_listings` setting (pending | approved)
 router.post('/listings', verifyToken,
   [
-    body('model_id').isInt().withMessage('Model ID is required'),
-    body('model_storage_id').isInt().withMessage('Storage is required'),
-    body('model_color_id').isInt().withMessage('Color is required'),
-    body('sim_configuration_id').isInt().withMessage('SIM configuration is required'),
+    body('listing_source').optional({ nullable: true }).isIn(['catalog', 'custom']).withMessage('Invalid listing source'),
+    body('category_id').optional({ nullable: true }).isInt().withMessage('Invalid category'),
+    body('model_id').optional({ nullable: true }).isInt().withMessage('Invalid model ID'),
+    body('custom_brand_name').optional({ nullable: true }).isString().isLength({ max: 80 }),
+    body('custom_model_name').optional({ nullable: true }).isString().isLength({ max: 120 }),
+    body('custom_storage').optional({ nullable: true }).isString().isLength({ max: 40 }),
+    body('custom_color_name').optional({ nullable: true }).isString().isLength({ max: 80 }),
+    body('custom_sim_configuration').optional({ nullable: true }).isString().isLength({ max: 80 }),
+    body('custom_case_size').optional({ nullable: true }).isString().isLength({ max: 40 }),
+    body('custom_connectivity').optional({ nullable: true }).isString().isLength({ max: 80 }),
+    body('model_storage_id').optional({ nullable: true }).isInt().withMessage('Invalid storage option'),
+    body('model_color_id').optional({ nullable: true }).isInt().withMessage('Invalid color option'),
+    body('sim_configuration_id').optional({ nullable: true }).isInt().withMessage('Invalid SIM configuration'),
+    body('model_watch_case_size_id').optional({ nullable: true }).isInt().withMessage('Invalid case size'),
+    body('model_watch_connectivity_id').optional({ nullable: true }).isInt().withMessage('Invalid connectivity option'),
     body('condition_id').isInt().withMessage('Condition ID is required'),
     body('price').isFloat({ min: 0.01 }).withMessage('Price must be greater than 0'),
     // Mobile sends null for optional empties (New condition has no battery, blank description/location).
     // express-validator optional() skips undefined only unless nullable: true.
     body('battery_percentage').optional({ nullable: true }).isInt({ min: 70, max: 100 }).withMessage('Battery percentage must be between 70 and 100'),
     body('description').optional({ nullable: true }).isString(),
-    body('location').optional({ nullable: true }).isString(),
+    body('location').optional({ nullable: true }).isString().isLength({ max: 100 }),
     body('city_id').optional({ nullable: true }).isInt().withMessage('Invalid city'),
     body('area_id').optional({ nullable: true }).isInt().withMessage('Invalid area'),
     body('images')
@@ -260,58 +154,60 @@ router.post('/listings', verifyToken,
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { model_id, model_storage_id, model_color_id, sim_configuration_id, condition_id, battery_percentage, price, description, location, city_id, area_id, images } = req.body;
+      const { condition_id, battery_percentage, price, description, location, city_id, area_id, images } = req.body;
       const userId = req.user.userId;
 
       if (!userId) {
         return res.status(401).json({ error: 'User ID not found in token' });
       }
 
-      const imageUrls = Array.isArray(images)
+      const rawImageUrls = Array.isArray(images)
         ? images.filter((url) => typeof url === 'string' && url.trim())
         : [];
 
-      if (imageUrls.length === 0) {
+      if (rawImageUrls.length === 0) {
         return res.status(400).json({ error: 'At least one image is required' });
       }
 
-      if (imageUrls.length > MAX_LISTING_IMAGES) {
+      if (rawImageUrls.length > MAX_LISTING_IMAGES) {
         return res.status(400).json({ error: `You can have up to ${MAX_LISTING_IMAGES} images per listing` });
       }
 
-      // Validate model_storage_id belongs to model_id and fetch derived storage_id
-      const storageResolved = await resolveLegacyStorageId(model_storage_id);
-      if (storageResolved.error) {
-        return res.status(400).json({ error: storageResolved.error });
+      const imageCheck = await validateListingImageUrls({
+        userId,
+        imageUrls: rawImageUrls,
+      });
+      if (!imageCheck.ok) {
+        return res.status(400).json({ error: imageCheck.error });
       }
-      if (storageResolved.model_id !== parseInt(model_id, 10)) {
-        return res.status(400).json({ error: 'Storage option does not belong to this model' });
-      }
-      const storage_id = storageResolved.storage_id;
+      const imageUrls = imageCheck.urls;
 
-      // Validate model_color_id belongs to model_id and fetch derived color_id
-      const mcResult = await pool.query(
-        `SELECT mc.id, mc.model_id, mc.color_id
-         FROM   model_colors mc
-         WHERE  mc.id = $1`,
-        [model_color_id]
-      );
-      if (mcResult.rows.length === 0) {
-        return res.status(400).json({ error: 'Invalid color option' });
+      const catalogFields = await validateListingIdentityAttributes(pool, req.body, {
+        resolveLegacyStorageId,
+      });
+      if (catalogFields.error) {
+        return res.status(400).json({ error: catalogFields.error });
       }
-      if (mcResult.rows[0].model_id !== parseInt(model_id)) {
-        return res.status(400).json({ error: 'Color option does not belong to this model' });
-      }
-      const color_id = mcResult.rows[0].color_id;
 
-      // Validate SIM configuration exists and is active
-      const simResult = await pool.query(
-        'SELECT id FROM sim_configurations WHERE id = $1 AND is_active = TRUE',
-        [sim_configuration_id]
-      );
-      if (simResult.rows.length === 0) {
-        return res.status(400).json({ error: 'Invalid SIM configuration' });
-      }
+      const {
+        listing_source,
+        category_id: listingCategoryId,
+        model_id,
+        storage_id,
+        color_id,
+        model_storage_id,
+        model_color_id,
+        sim_configuration_id,
+        model_watch_case_size_id,
+        model_watch_connectivity_id,
+        custom_brand_name,
+        custom_model_name,
+        custom_storage,
+        custom_color_name,
+        custom_sim_configuration,
+        custom_case_size,
+        custom_connectivity,
+      } = catalogFields;
 
       let resolvedCityId = city_id ? parseInt(city_id, 10) : null;
       let resolvedAreaId = area_id ? parseInt(area_id, 10) : null;
@@ -344,17 +240,27 @@ router.post('/listings', verifyToken,
         }
       }
 
-      // Create listing (status defaults to 'pending' for admin approval)
+      // Live Admin setting — no restart required when toggled.
+      const initialStatus = await resolveListingModerationStatus();
+
       const listingResult = await pool.query(
         `INSERT INTO listings
            (user_id, model_id, storage_id, color_id, model_storage_id, model_color_id,
-            sim_configuration_id, condition_id, battery_percentage, price, description, location,
-            city_id, area_id, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'pending')
+            sim_configuration_id, model_watch_case_size_id, model_watch_connectivity_id,
+            condition_id, battery_percentage, price, description, location,
+            city_id, area_id, status, decline_reason, approved_or_rejected_at, moderated_by_admin_id,
+            category_id, listing_source, custom_brand_name, custom_model_name, custom_storage,
+            custom_color_name, custom_sim_configuration, custom_case_size, custom_connectivity)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULL,
+                 CASE WHEN $17::varchar = 'approved' THEN CURRENT_TIMESTAMP ELSE NULL END,
+                 NULL, $18, $19, $20, $21, $22, $23, $24, $25, $26)
          RETURNING *`,
         [userId, model_id, storage_id, color_id, model_storage_id, model_color_id,
-         sim_configuration_id, condition_id, battery_percentage || null, price, description || null,
-         resolvedLocation, resolvedCityId, resolvedAreaId]
+         sim_configuration_id, model_watch_case_size_id, model_watch_connectivity_id,
+         condition_id, battery_percentage || null, price, description || null,
+         resolvedLocation, resolvedCityId, resolvedAreaId, initialStatus,
+         listingCategoryId, listing_source, custom_brand_name, custom_model_name, custom_storage,
+         custom_color_name, custom_sim_configuration, custom_case_size, custom_connectivity]
       );
 
       const listing = listingResult.rows[0];
@@ -368,42 +274,41 @@ router.post('/listings', verifyToken,
       }
 
       // Fetch full listing with relations
-      const fullListing = await pool.query(
-        `SELECT 
-          l.*,
-          m.name as model_name,
-          b.name as brand_name,
-          s.capacity_gb,
-          c.name as color_name,
-          c.hex_code as color_hex,
-          cond.name as condition_name,
-          sim.name as sim_configuration_name,
-          u.first_name as seller_first_name,
-          u.last_name as seller_last_name
-         FROM listings l
-         JOIN models m ON l.model_id = m.id
-         JOIN brands b ON m.brand_id = b.id
-         JOIN storage_options s ON l.storage_id = s.id
-         JOIN colors c ON l.color_id = c.id
-         JOIN conditions cond ON l.condition_id = cond.id
-         LEFT JOIN sim_configurations sim ON l.sim_configuration_id = sim.id
-         JOIN users u ON u.id = l.user_id
-         WHERE l.id = $1`,
-        [listing.id]
+      const fullListing = await fetchListingRowAfterWrite(pool, listing.id, {
+        withSellerNames: true,
+      });
+
+      const listingDetails = fullListing.rows[0];
+      const deviceName = formatListingDeviceName(
+        listingDetails.brand_name,
+        listingDetails.model_name
       );
 
-      // Notify active Admin Web staff (admins table) — never fails the creation
-      const listingDetails = fullListing.rows[0];
-      const sellerName = `${listingDetails.seller_first_name || ''} ${listingDetails.seller_last_name || ''}`.trim();
-      await notifyAdminsOfNewListing(pool, {
-        listingId: listing.id,
-        deviceName: `${listingDetails.brand_name} ${listingDetails.model_name}`,
-        brandName: listingDetails.brand_name,
-        modelName: listingDetails.model_name,
-        price: listingDetails.price,
-        sellerName: sellerName || null,
-        submittedAt: listingDetails.created_at,
-      });
+      // Manual moderation: notify admins + tell the seller it awaits review.
+      // Auto-approve: only the "Listing Live" owner notification (never both).
+      if (listing.status === LISTING_STATUS.PENDING) {
+        const sellerName = `${listingDetails.seller_first_name || ''} ${listingDetails.seller_last_name || ''}`.trim();
+        await notifyAdminsOfNewListing(pool, {
+          listingId: listing.id,
+          deviceName,
+          brandName: listingDetails.brand_name,
+          modelName: listingDetails.model_name,
+          price: listingDetails.price,
+          sellerName: sellerName || null,
+          submittedAt: listingDetails.created_at,
+        });
+        await notifyListingSubmitted(pool, {
+          userId,
+          listingId: listing.id,
+          deviceName,
+        });
+      } else if (listing.status === LISTING_STATUS.APPROVED) {
+        await notifyListingLive(pool, {
+          userId,
+          listingId: listing.id,
+          deviceName,
+        });
+      }
 
       // Keep the create response shape stable for mobile (omit seller_* join fields).
       const listingResponse = { ...listingDetails };
@@ -434,6 +339,8 @@ router.get('/listings', async (req, res) => {
       model_id = '',
       model_storage_id = '',
       model_color_id = '',
+      model_watch_case_size_id = '',
+      model_watch_connectivity_id = '',
       storage_id = '',
       color_id = '',
       condition_id = '',
@@ -456,181 +363,29 @@ router.get('/listings', async (req, res) => {
     }
 
     try {
-      let whereConditions = ['l.status = $1'];
-      let queryParams = [status];
-      let paramIndex = 2;
-
-      const pushParam = (value) => {
-        queryParams.push(value);
-        const idx = paramIndex;
-        paramIndex += 1;
-        return idx;
-      };
-
-      if (search && String(search).trim()) {
-        const normalizedSearch = normalizeMarketplaceSearch(search);
-        const searchClause = buildMarketplaceSearchClause(normalizedSearch, pushParam);
-        if (searchClause) {
-          whereConditions.push(searchClause);
-        }
-      }
-
-      if (category_id && String(category_id).trim()) {
-        const i = pushParam(parseInt(category_id, 10));
-        whereConditions.push(`m.category_id = $${i}`);
-      }
-
-      if (brand_id && String(brand_id).trim()) {
-        const i = pushParam(parseInt(brand_id, 10));
-        whereConditions.push(`b.id = $${i}`);
-      }
-
-      if (model_id && String(model_id).trim()) {
-        const i = pushParam(parseInt(model_id, 10));
-        whereConditions.push(`m.id = $${i}`);
-      }
-
-      // Catalog-aware storage filter (preferred)
-      if (model_storage_id && String(model_storage_id).trim()) {
-        const i = pushParam(parseInt(model_storage_id, 10));
-        whereConditions.push(`(
-          l.model_storage_id = $${i}
-          OR (
-            l.model_storage_id IS NULL
-            AND l.storage_id = (
-              SELECT so.id
-              FROM model_storages ms
-              JOIN storage_capacities sc ON sc.id = ms.storage_capacity_id
-              JOIN storage_options so ON so.capacity_gb = sc.capacity_gb
-              WHERE ms.id = $${i}
-            )
-          )
-        )`);
-      } else if (storage_id && String(storage_id).trim()) {
-        const i = pushParam(parseInt(storage_id, 10));
-        whereConditions.push(`l.storage_id = $${i}`);
-      }
-
-      // Catalog-aware color filter (preferred)
-      if (model_color_id && String(model_color_id).trim()) {
-        const i = pushParam(parseInt(model_color_id, 10));
-        whereConditions.push(`(
-          l.model_color_id = $${i}
-          OR (
-            l.model_color_id IS NULL
-            AND l.color_id = (SELECT mc.color_id FROM model_colors mc WHERE mc.id = $${i})
-          )
-        )`);
-      } else if (color_id && String(color_id).trim()) {
-        const i = pushParam(parseInt(color_id, 10));
-        whereConditions.push(`l.color_id = $${i}`);
-      }
-
-      if (condition_id && String(condition_id).trim()) {
-        const i = pushParam(parseInt(condition_id, 10));
-        whereConditions.push(`l.condition_id = $${i}`);
-      }
-
-      if (min_price !== undefined && String(min_price).trim() !== '') {
-        const i = pushParam(parseFloat(min_price));
-        whereConditions.push(`l.price >= $${i}`);
-      }
-
-      if (max_price !== undefined && String(max_price).trim() !== '') {
-        const i = pushParam(parseFloat(max_price));
-        whereConditions.push(`l.price <= $${i}`);
-      }
-
-      if (min_battery !== undefined && String(min_battery).trim() !== '') {
-        const i = pushParam(parseInt(min_battery, 10));
-        whereConditions.push(`l.battery_percentage IS NOT NULL AND l.battery_percentage >= $${i}`);
-      }
-
-      if (max_battery !== undefined && String(max_battery).trim() !== '') {
-        const i = pushParam(parseInt(max_battery, 10));
-        whereConditions.push(`l.battery_percentage IS NOT NULL AND l.battery_percentage <= $${i}`);
-      }
-
-      if (city_id && String(city_id).trim()) {
-        const i = pushParam(parseInt(city_id, 10));
-        whereConditions.push(`(
-          l.city_id = $${i}
-          OR (
-            l.city_id IS NULL
-            AND EXISTS (
-              SELECT 1 FROM cities ci
-              WHERE ci.id = $${i}
-                AND (
-                  l.location ILIKE '%' || ci.name_en || '%'
-                  OR (ci.name_ar IS NOT NULL AND l.location ILIKE '%' || ci.name_ar || '%')
-                )
-            )
-          )
-        )`);
-      }
-
-      if (area_id && String(area_id).trim()) {
-        const i = pushParam(parseInt(area_id, 10));
-        whereConditions.push(`(
-          l.area_id = $${i}
-          OR (
-            l.area_id IS NULL
-            AND EXISTS (
-              SELECT 1 FROM areas ar
-              WHERE ar.id = $${i}
-                AND (
-                  l.location ILIKE '%' || ar.name_en || '%'
-                  OR (ar.name_ar IS NOT NULL AND l.location ILIKE '%' || ar.name_ar || '%')
-                )
-            )
-          )
-        )`);
-      }
-
-      const sortKey = String(sort || 'newest').toLowerCase();
-      const orderByMap = {
-        newest: 'l.created_at DESC',
-        oldest: 'l.created_at ASC',
-        price_asc: 'l.price ASC, l.created_at DESC',
-        price_desc: 'l.price DESC, l.created_at DESC',
-        lowest_price: 'l.price ASC, l.created_at DESC',
-        highest_price: 'l.price DESC, l.created_at DESC',
-      };
-      const orderBy = orderByMap[sortKey] || orderByMap.newest;
-
-      const whereClause = whereConditions.join(' AND ');
-      const limitIdx = pushParam(parseInt(limit, 10));
-      const offsetIdx = pushParam(parseInt(offset, 10));
-
-      const result = await pool.query(
-        `SELECT
-          l.*,
-          m.name as model_name,
-          m.category_id,
-          b.name as brand_name,
-          s.capacity_gb,
-          c.name as color_name,
-          c.hex_code as color_hex,
-          cond.name as condition_name,
-          u.first_name,
-          u.last_name,
-          city.name_en as city_name,
-          area.name_en as area_name,
-          (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY display_order LIMIT 1) as thumbnail_image
-         FROM listings l
-         JOIN models m ON l.model_id = m.id
-         JOIN brands b ON m.brand_id = b.id
-         JOIN storage_options s ON l.storage_id = s.id
-         JOIN colors c ON l.color_id = c.id
-         JOIN conditions cond ON l.condition_id = cond.id
-         JOIN users u ON l.user_id = u.id
-         LEFT JOIN cities city ON l.city_id = city.id
-         LEFT JOIN areas area ON l.area_id = area.id
-         WHERE ${whereClause}
-         ORDER BY ${orderBy}
-         LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
-        queryParams
-      );
+      const result = await fetchMarketplaceListings(pool, {
+        status,
+        search,
+        category_id,
+        brand_id,
+        model_id,
+        model_storage_id,
+        model_color_id,
+        model_watch_case_size_id,
+        model_watch_connectivity_id,
+        storage_id,
+        color_id,
+        condition_id,
+        min_price,
+        max_price,
+        min_battery,
+        max_battery,
+        city_id,
+        area_id,
+        sort,
+        limit,
+        offset,
+      });
 
       res.json({ listings: result.rows.map(withoutViewCount) });
     } catch (dbError) {
@@ -651,6 +406,8 @@ router.get('/listings', async (req, res) => {
 // Get user's listings (must be registered before /listings/:id)
 // Every status is returned, including the terminal ones: the owner's screen
 // groups them into active, sold, and deleted sections.
+// Only revision tips are returned — superseded declined snapshots stay in DB
+// for admin history / reporting but must not duplicate My Listings cards.
 router.get('/listings/user/my', verifyToken, async (req, res) => {
   try {
     const userId = req.user.userId;
@@ -659,25 +416,7 @@ router.get('/listings/user/my', verifyToken, async (req, res) => {
       return res.status(401).json({ error: 'User ID not found in token' });
     }
 
-    const result = await pool.query(
-      `SELECT 
-        l.*,
-        m.name as model_name,
-        b.name as brand_name,
-        s.capacity_gb,
-        c.name as color_name,
-        cond.name as condition_name,
-        (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY display_order LIMIT 1) as thumbnail_image
-       FROM listings l
-       JOIN models m ON l.model_id = m.id
-       JOIN brands b ON m.brand_id = b.id
-       JOIN storage_options s ON l.storage_id = s.id
-       JOIN colors c ON l.color_id = c.id
-       JOIN conditions cond ON l.condition_id = cond.id
-       WHERE l.user_id = $1
-       ORDER BY l.created_at DESC`,
-      [userId]
-    );
+    const result = await fetchOwnerMyListings(pool, userId);
 
     res.json({ listings: result.rows });
   } catch (error) {
@@ -692,34 +431,7 @@ router.get('/listings/:id', optionalAuth, async (req, res) => {
     const { id } = req.params;
 
     // Get listing details
-    const listingResult = await pool.query(
-      `SELECT 
-        l.*,
-        m.name as model_name,
-        m.brand_id as brand_id,
-        m.release_year,
-        m.chipset,
-        m.screen_size,
-        b.name as brand_name,
-        s.capacity_gb,
-        c.name as color_name,
-        c.hex_code as color_hex,
-        cond.name as condition_name,
-        sim.name as sim_configuration_name,
-        u.first_name,
-        u.last_name,
-        u.phone_number
-       FROM listings l
-       JOIN models m ON l.model_id = m.id
-       JOIN brands b ON m.brand_id = b.id
-       JOIN storage_options s ON l.storage_id = s.id
-       JOIN colors c ON l.color_id = c.id
-       JOIN conditions cond ON l.condition_id = cond.id
-       LEFT JOIN sim_configurations sim ON l.sim_configuration_id = sim.id
-       JOIN users u ON l.user_id = u.id
-       WHERE l.id = $1`,
-      [id]
-    );
+    const listingResult = await fetchListingRowById(pool, id);
 
     if (listingResult.rows.length === 0) {
       return res.status(404).json({ error: 'Listing not found' });
@@ -734,15 +446,81 @@ router.get('/listings/:id', optionalAuth, async (req, res) => {
     const listing = listingResult.rows[0];
     const isOwner = Boolean(req.user?.userId) && listing.user_id === req.user.userId;
 
+    const childResult = await pool.query(
+      'SELECT id FROM listings WHERE previous_listing_id = $1 LIMIT 1',
+      [id]
+    );
+    const isSuperseded = childResult.rows.length > 0;
+
     // A hidden (or pending/declined/deleted) listing exists only for its owner.
+    // Frozen approved snapshots are not marketplace listings.
     // Everyone else gets the same answer as a missing id.
-    if (!isPublicListingStatus(listing.status) && !isOwner) {
+    if ((!isPublicListingStatus(listing.status) || isSuperseded) && !isOwner) {
       return res.status(404).json({ error: 'Listing not found' });
+    }
+
+    // Public marketplace contact: seller phone is intentional Call Seller data on
+    // approved listings visible to any viewer who can open this listing.
+    // (Non-public listings are owner-only above; guests never reach this path.)
+
+    // Owner dashboard metrics — buyers never receive these counts.
+    if (isOwner) {
+      const metricsResult = await pool.query(
+        `SELECT
+           (SELECT COUNT(*)::int FROM favorites WHERE listing_id = $1) AS favorites_count,
+           (SELECT COUNT(*)::int FROM offers WHERE listing_id = $1) AS offers_count`,
+        [id]
+      );
+      listing.favorites_count = metricsResult.rows[0]?.favorites_count ?? 0;
+      listing.offers_count = metricsResult.rows[0]?.offers_count ?? 0;
+    }
+
+    // Buyer-private offer summary — never for owners, guests, or other buyers.
+    let buyerOfferFields = {
+      has_my_offer: false,
+      my_offer: null,
+      my_offer_status: null,
+      my_offer_amount: null,
+      my_offer_created_at: null,
+    };
+
+    if (req.user?.userId && !isOwner) {
+      const myOfferResult = await pool.query(
+        `SELECT id, listing_id, offered_price, status, created_at, updated_at
+         FROM offers
+         WHERE listing_id = $1 AND buyer_id = $2
+         ORDER BY
+           CASE status
+             WHEN 'pending' THEN 0
+             WHEN 'accepted' THEN 1
+             WHEN 'rejected' THEN 2
+             WHEN 'withdrawn' THEN 3
+             ELSE 4
+           END,
+           created_at DESC
+         LIMIT 1`,
+        [id, req.user.userId]
+      );
+
+      if (myOfferResult.rows.length > 0) {
+        const myOffer = myOfferResult.rows[0];
+        buyerOfferFields = {
+          has_my_offer: true,
+          my_offer: myOffer,
+          my_offer_status: myOffer.status,
+          my_offer_amount: myOffer.offered_price,
+          my_offer_created_at: myOffer.created_at,
+        };
+      }
     }
 
     res.json({
       // is_owner saves the client a separate profile request to decide what to show
-      listing: { ...(isOwner ? listing : withoutViewCount(listing)), is_owner: isOwner },
+      listing: {
+        ...(isOwner ? listing : withoutViewCount(listing)),
+        is_owner: isOwner,
+        ...buyerOfferFields,
+      },
       images: imagesResult.rows
     });
   } catch (error) {
@@ -941,15 +719,26 @@ router.patch('/listings/:id/unhide', verifyToken, (req, res) =>
 // Update listing (owner only). Editing sends the listing back to moderation.
 router.put('/listings/:id', verifyToken,
   [
-    body('model_id').isInt().withMessage('Model ID is required'),
-    body('model_storage_id').isInt().withMessage('Storage is required'),
-    body('model_color_id').isInt().withMessage('Color is required'),
-    body('sim_configuration_id').isInt().withMessage('SIM configuration is required'),
+    body('listing_source').optional({ nullable: true }).isIn(['catalog', 'custom']).withMessage('Invalid listing source'),
+    body('category_id').optional({ nullable: true }).isInt().withMessage('Invalid category'),
+    body('model_id').optional({ nullable: true }).isInt().withMessage('Invalid model ID'),
+    body('custom_brand_name').optional({ nullable: true }).isString().isLength({ max: 80 }),
+    body('custom_model_name').optional({ nullable: true }).isString().isLength({ max: 120 }),
+    body('custom_storage').optional({ nullable: true }).isString().isLength({ max: 40 }),
+    body('custom_color_name').optional({ nullable: true }).isString().isLength({ max: 80 }),
+    body('custom_sim_configuration').optional({ nullable: true }).isString().isLength({ max: 80 }),
+    body('custom_case_size').optional({ nullable: true }).isString().isLength({ max: 40 }),
+    body('custom_connectivity').optional({ nullable: true }).isString().isLength({ max: 80 }),
+    body('model_storage_id').optional({ nullable: true }).isInt().withMessage('Invalid storage option'),
+    body('model_color_id').optional({ nullable: true }).isInt().withMessage('Invalid color option'),
+    body('sim_configuration_id').optional({ nullable: true }).isInt().withMessage('Invalid SIM configuration'),
+    body('model_watch_case_size_id').optional({ nullable: true }).isInt().withMessage('Invalid case size'),
+    body('model_watch_connectivity_id').optional({ nullable: true }).isInt().withMessage('Invalid connectivity option'),
     body('condition_id').isInt().withMessage('Condition ID is required'),
     body('price').isFloat({ min: 0.01 }).withMessage('Price must be greater than 0'),
     body('battery_percentage').optional({ nullable: true }).isInt({ min: 70, max: 100 }).withMessage('Battery percentage must be between 70 and 100'),
     body('description').optional({ nullable: true }).isString(),
-    body('location').optional({ nullable: true }).isString(),
+    body('location').optional({ nullable: true }).isString().isLength({ max: 100 }),
     body('city_id').optional({ nullable: true }).isInt().withMessage('Invalid city'),
     body('area_id').optional({ nullable: true }).isInt().withMessage('Invalid area'),
     body('images').optional().isArray().withMessage('Images must be an array'),
@@ -970,7 +759,8 @@ router.put('/listings/:id', verifyToken,
 
       // Verify the listing exists and belongs to the current user
       const checkResult = await pool.query(
-        'SELECT user_id, status FROM listings WHERE id = $1',
+        `SELECT user_id, status, revision_number, root_listing_id, previous_listing_id
+         FROM listings WHERE id = $1`,
         [id]
       );
 
@@ -983,58 +773,87 @@ router.put('/listings/:id', verifyToken,
       }
 
       // Terminal listings (sold, deleted) can no longer be edited
-      const currentStatus = checkResult.rows[0].status;
+      const currentListing = checkResult.rows[0];
+      const currentStatus = currentListing.status;
       if (isTerminalListingStatus(currentStatus)) {
         return res.status(400).json({ error: 'This listing can no longer be edited' });
       }
 
-      const { model_id, model_storage_id, model_color_id, sim_configuration_id, condition_id, battery_percentage, price, description, location, city_id, area_id, images } = req.body;
+      // Superseded snapshots (already have a child revision) are immutable.
+      const childResult = await pool.query(
+        `SELECT id FROM listings WHERE previous_listing_id = $1 LIMIT 1`,
+        [id]
+      );
+      if (childResult.rows.length > 0) {
+        const tipResult = await pool.query(
+          `SELECT tip.id
+           FROM listings tip
+           WHERE tip.root_listing_id = $1
+             AND NOT EXISTS (
+               SELECT 1 FROM listings child
+               WHERE child.previous_listing_id = tip.id
+             )
+           ORDER BY tip.revision_number DESC
+           LIMIT 1`,
+          [currentListing.root_listing_id || id]
+        );
+        return res.status(409).json({
+          error: 'This listing has been superseded by a newer revision',
+          tip_listing_id: tipResult.rows[0]?.id || childResult.rows[0].id,
+        });
+      }
+
+      const { condition_id, battery_percentage, price, description, location, city_id, area_id, images } = req.body;
 
       if (Array.isArray(images) && images.length > MAX_LISTING_IMAGES) {
         return res.status(400).json({ error: `You can have up to ${MAX_LISTING_IMAGES} images per listing` });
       }
 
-      // When the client sends an images array, require at least one image
+      // When the client sends an images array, require at least one image and
+      // that every URL is an owned Telefonak upload (or already on this listing).
+      let validatedEditImages = null;
       if (Array.isArray(images)) {
         const finalUrls = images.filter((url) => typeof url === 'string' && url.trim());
         if (finalUrls.length === 0) {
           return res.status(400).json({ error: 'At least one image is required' });
         }
+        const imageCheck = await validateListingImageUrls({
+          userId,
+          imageUrls: finalUrls,
+          listingId: parseInt(id, 10),
+        });
+        if (!imageCheck.ok) {
+          return res.status(400).json({ error: imageCheck.error });
+        }
+        validatedEditImages = imageCheck.urls;
       }
 
-      // Validate model_storage_id and derive legacy storage_id
-      const storageResolved = await resolveLegacyStorageId(model_storage_id);
-      if (storageResolved.error) {
-        return res.status(400).json({ error: storageResolved.error });
+      const catalogFields = await validateListingIdentityAttributes(pool, req.body, {
+        resolveLegacyStorageId,
+      });
+      if (catalogFields.error) {
+        return res.status(400).json({ error: catalogFields.error });
       }
-      if (storageResolved.model_id !== parseInt(model_id, 10)) {
-        return res.status(400).json({ error: 'Storage option does not belong to this model' });
-      }
-      const storage_id = storageResolved.storage_id;
 
-      // Validate model_color_id and derive legacy color_id
-      const mcResult = await pool.query(
-        `SELECT mc.id, mc.model_id, mc.color_id
-         FROM   model_colors mc
-         WHERE  mc.id = $1`,
-        [model_color_id]
-      );
-      if (mcResult.rows.length === 0) {
-        return res.status(400).json({ error: 'Invalid color option' });
-      }
-      if (mcResult.rows[0].model_id !== parseInt(model_id)) {
-        return res.status(400).json({ error: 'Color option does not belong to this model' });
-      }
-      const color_id = mcResult.rows[0].color_id;
-
-      // Validate SIM configuration exists and is active
-      const simResult = await pool.query(
-        'SELECT id FROM sim_configurations WHERE id = $1 AND is_active = TRUE',
-        [sim_configuration_id]
-      );
-      if (simResult.rows.length === 0) {
-        return res.status(400).json({ error: 'Invalid SIM configuration' });
-      }
+      const {
+        listing_source,
+        category_id: listingCategoryId,
+        model_id,
+        storage_id,
+        color_id,
+        model_storage_id,
+        model_color_id,
+        sim_configuration_id,
+        model_watch_case_size_id,
+        model_watch_connectivity_id,
+        custom_brand_name,
+        custom_model_name,
+        custom_storage,
+        custom_color_name,
+        custom_sim_configuration,
+        custom_case_size,
+        custom_connectivity,
+      } = catalogFields;
 
       let resolvedCityId = city_id ? parseInt(city_id, 10) : null;
       let resolvedAreaId = area_id ? parseInt(area_id, 10) : null;
@@ -1067,33 +886,387 @@ router.put('/listings/:id', verifyToken,
         }
       }
 
-      // Any edit re-enters moderation as 'pending'. Ownership and created_at are preserved.
-      await pool.query(
-        `UPDATE listings
-         SET model_id              = $1,
-             storage_id            = $2,
-             color_id              = $3,
-             model_storage_id      = $4,
-             model_color_id        = $5,
-             sim_configuration_id  = $6,
-             condition_id          = $7,
-             battery_percentage    = $8,
-             price                 = $9,
-             description           = $10,
-             location              = $11,
-             city_id               = $12,
-             area_id               = $13,
-             status                = 'pending',
-             updated_at            = CURRENT_TIMESTAMP
-         WHERE id = $14`,
-        [model_id, storage_id, color_id, model_storage_id, model_color_id,
-         sim_configuration_id, condition_id, battery_percentage || null, price, description || null,
-         resolvedLocation, resolvedCityId, resolvedAreaId, id]
-      );
+      const listingFieldValues = [
+        model_id,
+        storage_id,
+        color_id,
+        model_storage_id,
+        model_color_id,
+        sim_configuration_id,
+        model_watch_case_size_id,
+        model_watch_connectivity_id,
+        condition_id,
+        battery_percentage || null,
+        price,
+        description || null,
+        resolvedLocation,
+        resolvedCityId,
+        resolvedAreaId,
+        listingCategoryId,
+        listing_source,
+        custom_brand_name,
+        custom_model_name,
+        custom_storage,
+        custom_color_name,
+        custom_sim_configuration,
+        custom_case_size,
+        custom_connectivity,
+      ];
+
+      // Declined tip → INSERT immutable snapshot revision (parent never mutates).
+      // Already-resubmitted / already-updated tip → in-place UPDATE, same queue status.
+      // Approved tip → in-place UPDATE to updated (awaiting moderation).
+      // All other editable statuses → in-place UPDATE via auto-approve / pending.
+      if (currentStatus === LISTING_STATUS.DECLINED) {
+        const client = await pool.connect();
+        let newListingId;
+        try {
+          await client.query('BEGIN');
+
+          const insertResult = await client.query(
+            `INSERT INTO listings
+               (user_id, model_id, storage_id, color_id, model_storage_id, model_color_id,
+                sim_configuration_id, model_watch_case_size_id, model_watch_connectivity_id,
+                condition_id, battery_percentage, price, description, location,
+                city_id, area_id, category_id, listing_source, custom_brand_name, custom_model_name,
+                custom_storage, custom_color_name, custom_sim_configuration, custom_case_size,
+                custom_connectivity, status, decline_reason, approved_or_rejected_at, moderated_by_admin_id,
+                resubmitted_at, previous_listing_id, revision_number, root_listing_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+                     $17, $18, $19, $20, $21, $22, $23, $24, $25, $26,
+                     NULL, NULL, NULL, CURRENT_TIMESTAMP, $27, $28, $29)
+             RETURNING *`,
+            [
+              userId,
+              ...listingFieldValues,
+              LISTING_STATUS.RESUBMITTED,
+              parseInt(id, 10),
+              (currentListing.revision_number || 1) + 1,
+              currentListing.root_listing_id || parseInt(id, 10),
+            ]
+          );
+
+          newListingId = insertResult.rows[0].id;
+          const publicBaseUrl = resolveBaseUrl(req);
+
+          let sourceUrls;
+          if (validatedEditImages) {
+            sourceUrls = validatedEditImages;
+          } else {
+            const parentImages = await client.query(
+              `SELECT image_url FROM listing_images
+               WHERE listing_id = $1 ORDER BY display_order ASC`,
+              [id]
+            );
+            sourceUrls = parentImages.rows.map((row) => row.image_url);
+          }
+
+          if (sourceUrls.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: 'At least one image is required' });
+          }
+
+          for (let i = 0; i < sourceUrls.length; i++) {
+            const copiedUrl = copyLocalListingImageFile(sourceUrls[i], publicBaseUrl);
+            const copiedFilename = listingImageFilename(copiedUrl);
+            if (copiedFilename) {
+              await recordListingImageUpload(userId, copiedFilename);
+            }
+            await client.query(
+              `INSERT INTO listing_images (listing_id, image_url, display_order)
+               VALUES ($1, $2, $3)`,
+              [newListingId, copiedUrl, i]
+            );
+          }
+
+          await client.query('COMMIT');
+        } catch (txError) {
+          try {
+            await client.query('ROLLBACK');
+          } catch {
+            // ignore rollback errors
+          }
+          throw txError;
+        } finally {
+          client.release();
+        }
+
+        const fullListing = await fetchListingRowAfterWrite(pool, newListingId, {
+          withSellerNames: true,
+          withBrandId: true,
+        });
+
+        const imagesResult = await pool.query(
+          'SELECT * FROM listing_images WHERE listing_id = $1 ORDER BY display_order',
+          [newListingId]
+        );
+
+        const listingDetails = fullListing.rows[0];
+        const deviceName = formatListingDeviceName(
+          listingDetails.brand_name,
+          listingDetails.model_name
+        );
+        const sellerName = `${listingDetails.seller_first_name || ''} ${listingDetails.seller_last_name || ''}`.trim();
+
+        await notifyListingResubmitted(pool, {
+          userId,
+          listingId: newListingId,
+          deviceName,
+        });
+
+        await notifyAdminsOfNewListing(pool, {
+          listingId: newListingId,
+          deviceName,
+          brandName: listingDetails.brand_name,
+          modelName: listingDetails.model_name,
+          price: listingDetails.price,
+          sellerName: sellerName || null,
+          submittedAt: listingDetails.resubmitted_at || listingDetails.created_at,
+          title: 'Listing Resubmitted for Review',
+        });
+
+        await recordListingModerationEvent(pool, {
+          eventType: EVENT_TYPE.RESUBMITTED,
+          listingId: newListingId,
+          previousListingId: parseInt(id, 10),
+          rootListingId: listingDetails.root_listing_id || parseInt(id, 10),
+          userId,
+          previousStatus: LISTING_STATUS.DECLINED,
+          newStatus: LISTING_STATUS.RESUBMITTED,
+          price: listingDetails.price,
+        });
+
+        const listingResponse = { ...listingDetails };
+        delete listingResponse.seller_first_name;
+        delete listingResponse.seller_last_name;
+
+        return res.json({
+          message: 'Listing resubmitted successfully',
+          listing: listingResponse,
+          images: imagesResult.rows,
+        });
+      }
+
+      let nextStatus;
+      const sellerEditStatus = resolveSellerEditNextStatus(currentStatus);
+      if (sellerEditStatus && currentStatus !== LISTING_STATUS.DECLINED) {
+        nextStatus = sellerEditStatus;
+      } else {
+        nextStatus = await resolveListingModerationStatus();
+      }
+
+      const isQueueStayEdit =
+        currentStatus === LISTING_STATUS.RESUBMITTED ||
+        currentStatus === LISTING_STATUS.UPDATED;
+
+      if (currentStatus === LISTING_STATUS.APPROVED) {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          const snapshot = await freezeCurrentListingRevision(client, parseInt(id, 10));
+          if (!snapshot) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Listing not found' });
+          }
+
+          const publicBaseUrl = resolveBaseUrl(req);
+          const parentImages = await client.query(
+            `SELECT image_url FROM listing_images
+             WHERE listing_id = $1 ORDER BY display_order ASC`,
+            [id]
+          );
+          for (let i = 0; i < parentImages.rows.length; i++) {
+            const copiedUrl = copyLocalListingImageFile(parentImages.rows[i].image_url, publicBaseUrl);
+            const copiedFilename = listingImageFilename(copiedUrl);
+            if (copiedFilename) {
+              await recordListingImageUpload(userId, copiedFilename);
+            }
+            await client.query(
+              `INSERT INTO listing_images (listing_id, image_url, display_order)
+               VALUES ($1, $2, $3)`,
+              [snapshot.id, copiedUrl, i]
+            );
+          }
+
+          await client.query(
+            `UPDATE listings
+             SET model_id              = $1,
+                 storage_id            = $2,
+                 color_id              = $3,
+                 model_storage_id      = $4,
+                 model_color_id        = $5,
+                 sim_configuration_id  = $6,
+                 model_watch_case_size_id = $7,
+                 model_watch_connectivity_id = $8,
+                 condition_id          = $9,
+                 battery_percentage    = $10,
+                 price                 = $11,
+                 description           = $12,
+                 location              = $13,
+                 city_id               = $14,
+                 area_id               = $15,
+                 category_id           = $16,
+                 listing_source        = $17,
+                 custom_brand_name     = $18,
+                 custom_model_name     = $19,
+                 custom_storage        = $20,
+                 custom_color_name     = $21,
+                 custom_sim_configuration = $22,
+                 custom_case_size      = $23,
+                 custom_connectivity   = $24,
+                 status                = $25,
+                 decline_reason        = NULL,
+                 approved_or_rejected_at = NULL,
+                 moderated_by_admin_id = NULL,
+                 resubmitted_at        = NULL,
+                 previous_listing_id   = $26,
+                 revision_number       = $27,
+                 updated_at            = CURRENT_TIMESTAMP
+             WHERE id = $28`,
+            [
+              ...listingFieldValues,
+              LISTING_STATUS.UPDATED,
+              snapshot.id,
+              (currentListing.revision_number || 1) + 1,
+              id,
+            ]
+          );
+
+          await recordListingModerationEvent(client, {
+            eventType: EVENT_TYPE.UPDATED,
+            listingId: parseInt(id, 10),
+            previousListingId: snapshot.id,
+            rootListingId: currentListing.root_listing_id || parseInt(id, 10),
+            userId,
+            previousStatus: LISTING_STATUS.APPROVED,
+            newStatus: LISTING_STATUS.UPDATED,
+            price,
+          });
+
+          await client.query('COMMIT');
+        } catch (txError) {
+          try {
+            await client.query('ROLLBACK');
+          } catch {
+            // ignore
+          }
+          throw txError;
+        } finally {
+          client.release();
+        }
+      } else if (currentStatus === LISTING_STATUS.RESUBMITTED) {
+        await pool.query(
+          `UPDATE listings
+           SET model_id              = $1,
+               storage_id            = $2,
+               color_id              = $3,
+               model_storage_id      = $4,
+               model_color_id        = $5,
+               sim_configuration_id  = $6,
+               model_watch_case_size_id = $7,
+               model_watch_connectivity_id = $8,
+               condition_id          = $9,
+               battery_percentage    = $10,
+               price                 = $11,
+               description           = $12,
+               location              = $13,
+               city_id               = $14,
+               area_id               = $15,
+               category_id           = $16,
+               listing_source        = $17,
+               custom_brand_name     = $18,
+               custom_model_name     = $19,
+               custom_storage        = $20,
+               custom_color_name     = $21,
+               custom_sim_configuration = $22,
+               custom_case_size      = $23,
+               custom_connectivity   = $24,
+               status                = $25,
+               resubmitted_at        = CURRENT_TIMESTAMP,
+               updated_at            = CURRENT_TIMESTAMP
+           WHERE id = $26`,
+          [...listingFieldValues, nextStatus, id]
+        );
+      } else if (isQueueStayEdit) {
+        await pool.query(
+          `UPDATE listings
+           SET model_id              = $1,
+               storage_id            = $2,
+               color_id              = $3,
+               model_storage_id      = $4,
+               model_color_id        = $5,
+               sim_configuration_id  = $6,
+               model_watch_case_size_id = $7,
+               model_watch_connectivity_id = $8,
+               condition_id          = $9,
+               battery_percentage    = $10,
+               price                 = $11,
+               description           = $12,
+               location              = $13,
+               city_id               = $14,
+               area_id               = $15,
+               category_id           = $16,
+               listing_source        = $17,
+               custom_brand_name     = $18,
+               custom_model_name     = $19,
+               custom_storage        = $20,
+               custom_color_name     = $21,
+               custom_sim_configuration = $22,
+               custom_case_size      = $23,
+               custom_connectivity   = $24,
+               status                = $25,
+               decline_reason        = NULL,
+               approved_or_rejected_at = NULL,
+               moderated_by_admin_id = NULL,
+               resubmitted_at        = NULL,
+               updated_at            = CURRENT_TIMESTAMP
+           WHERE id = $26`,
+          [...listingFieldValues, nextStatus, id]
+        );
+      } else {
+        await pool.query(
+          `UPDATE listings
+           SET model_id              = $1,
+               storage_id            = $2,
+               color_id              = $3,
+               model_storage_id      = $4,
+               model_color_id        = $5,
+               sim_configuration_id  = $6,
+               model_watch_case_size_id = $7,
+               model_watch_connectivity_id = $8,
+               condition_id          = $9,
+               battery_percentage    = $10,
+               price                 = $11,
+               description           = $12,
+               location              = $13,
+               city_id               = $14,
+               area_id               = $15,
+               category_id           = $16,
+               listing_source        = $17,
+               custom_brand_name     = $18,
+               custom_model_name     = $19,
+               custom_storage        = $20,
+               custom_color_name     = $21,
+               custom_sim_configuration = $22,
+               custom_case_size      = $23,
+               custom_connectivity   = $24,
+               status                = $25,
+               decline_reason        = NULL,
+               approved_or_rejected_at = CASE
+                 WHEN $25::varchar = 'approved' THEN CURRENT_TIMESTAMP
+                 ELSE NULL
+               END,
+               moderated_by_admin_id = NULL,
+               resubmitted_at        = NULL,
+               updated_at            = CURRENT_TIMESTAMP
+           WHERE id = $26`,
+          [...listingFieldValues, nextStatus, id]
+        );
+      }
 
       // Sync images when the client sends a final image URL list.
       // Omitted `images` leaves existing images unchanged.
-      if (Array.isArray(images)) {
+      if (validatedEditImages) {
         const existingResult = await pool.query(
           'SELECT id, image_url FROM listing_images WHERE listing_id = $1',
           [id]
@@ -1101,7 +1274,7 @@ router.put('/listings/:id', verifyToken,
         const existingByUrl = new Map(
           existingResult.rows.map((row) => [row.image_url, row])
         );
-        const finalUrls = images.filter((url) => typeof url === 'string' && url.trim());
+        const finalUrls = validatedEditImages;
         const finalUrlSet = new Set(finalUrls);
 
         // Remove images the seller deleted (DB row + local file)
@@ -1131,32 +1304,39 @@ router.put('/listings/:id', verifyToken,
       }
 
       // Return the full listing with relations so the client can refresh immediately
-      const fullListing = await pool.query(
-        `SELECT 
-          l.*,
-          m.name as model_name,
-          m.brand_id as brand_id,
-          b.name as brand_name,
-          s.capacity_gb,
-          c.name as color_name,
-          c.hex_code as color_hex,
-          cond.name as condition_name,
-          sim.name as sim_configuration_name
-         FROM listings l
-         JOIN models m ON l.model_id = m.id
-         JOIN brands b ON m.brand_id = b.id
-         JOIN storage_options s ON l.storage_id = s.id
-         JOIN colors c ON l.color_id = c.id
-         JOIN conditions cond ON l.condition_id = cond.id
-         LEFT JOIN sim_configurations sim ON l.sim_configuration_id = sim.id
-         WHERE l.id = $1`,
-        [id]
-      );
+      const fullListing = await fetchListingRowAfterWrite(pool, id, {
+        withBrandId: true,
+      });
 
       const imagesResult = await pool.query(
         'SELECT * FROM listing_images WHERE listing_id = $1 ORDER BY display_order',
         [id]
       );
+
+      if (currentStatus === LISTING_STATUS.RESUBMITTED) {
+        await notifyListingResubmitted(pool, {
+          userId,
+          listingId: parseInt(id, 10),
+          deviceName: await getListingDeviceName(pool, id),
+        });
+      } else if (nextStatus === LISTING_STATUS.UPDATED) {
+        const listingDetails = fullListing.rows[0];
+        const deviceName = await getListingDeviceName(pool, id);
+        await notifyListingUpdated(pool, {
+          userId,
+          listingId: parseInt(id, 10),
+          deviceName,
+        });
+        await notifyAdminsOfNewListing(pool, {
+          listingId: parseInt(id, 10),
+          deviceName,
+          brandName: listingDetails.brand_name,
+          modelName: listingDetails.model_name,
+          price: listingDetails.price,
+          submittedAt: listingDetails.updated_at || listingDetails.created_at,
+          title: 'Listing Updated — Awaiting Review',
+        });
+      }
 
       res.json({
         message: 'Listing updated successfully',

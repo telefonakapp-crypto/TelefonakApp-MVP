@@ -45,6 +45,8 @@ export function ListingsTable({ items, onView }: ListingsTableProps) {
               <th className="px-4 py-3">Seller</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Created</th>
+              <th className="px-4 py-3">Moderated At</th>
+              <th className="px-4 py-3">Moderated By</th>
               <th className="px-4 py-3">Actions</th>
             </tr>
           </thead>
@@ -73,6 +75,14 @@ export function ListingsTable({ items, onView }: ListingsTableProps) {
                 </td>
                 <td className="px-4 py-3 whitespace-nowrap text-slate-500">
                   {formatDate(listing.created_at)}
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap text-slate-500">
+                  {listing.approved_or_rejected_at
+                    ? formatDate(listing.approved_or_rejected_at)
+                    : '—'}
+                </td>
+                <td className="px-4 py-3 whitespace-nowrap text-slate-700">
+                  {listing.moderated_by || '—'}
                 </td>
                 <td className="px-4 py-3">
                   <button

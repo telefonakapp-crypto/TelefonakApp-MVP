@@ -1,14 +1,49 @@
 /**
  * Shared listing moderation write used by Admin Web (verifyAdminAuth / admins).
+ *
+ * Allowed transitions:
+ *   pending | resubmitted | updated → approved
+ *   pending | resubmitted | updated → declined
+ *   approved → declined   (policy revoke; same row, no revision)
+ *
+ * Declined / sold / deleted snapshots cannot be moderated.
  */
 const pool = require('../config/database');
 const {
   getListingDeviceName,
   notifyListingApproved,
   notifyListingRejected,
+  notifyListingDeclinedFromApproved,
 } = require('./notifications');
-const { LISTING_STATUS, TERMINAL_LISTING_STATUSES } = require('./listingStatus');
+const {
+  LISTING_STATUS,
+  TERMINAL_LISTING_STATUSES,
+} = require('./listingStatus');
 const { writeAuditLog } = require('./auditLog');
+const { recordListingModerationEvent, EVENT_TYPE } = require('./listingModerationEvents');
+
+function allowedSourceStatusesFor(targetStatus) {
+  if (targetStatus === LISTING_STATUS.APPROVED) {
+    return [
+      LISTING_STATUS.PENDING,
+      LISTING_STATUS.RESUBMITTED,
+      LISTING_STATUS.UPDATED,
+    ];
+  }
+  if (targetStatus === LISTING_STATUS.DECLINED) {
+    return [
+      LISTING_STATUS.PENDING,
+      LISTING_STATUS.RESUBMITTED,
+      LISTING_STATUS.UPDATED,
+      LISTING_STATUS.APPROVED,
+    ];
+  }
+  return [];
+}
+
+function canModerateTo(currentStatus, targetStatus) {
+  return allowedSourceStatusesFor(targetStatus).includes(currentStatus);
+}
 
 /**
  * @param {import('express').Request} req
@@ -35,9 +70,29 @@ async function moderateListing(req, res, { status, message, requireReason = fals
       return res.status(404).json({ error: 'Listing not found' });
     }
 
-    if (TERMINAL_LISTING_STATUSES.includes(current.rows[0].status)) {
+    const currentStatus = current.rows[0].status;
+
+    if (TERMINAL_LISTING_STATUSES.includes(currentStatus)) {
       return res.status(409).json({
-        error: `A ${current.rows[0].status} listing can no longer be moderated`,
+        error: `A ${currentStatus} listing can no longer be moderated`,
+      });
+    }
+
+    // Declined snapshots are immutable history — never approve/reopen them.
+    if (currentStatus === LISTING_STATUS.DECLINED) {
+      return res.status(409).json({
+        error: 'A declined listing is an immutable snapshot and cannot be moderated',
+      });
+    }
+
+    if (!canModerateTo(currentStatus, status)) {
+      if (status === LISTING_STATUS.APPROVED) {
+        return res.status(409).json({
+          error: `Only pending, resubmitted, or updated listings can be approved (current: ${currentStatus})`,
+        });
+      }
+      return res.status(409).json({
+        error: `Only pending, resubmitted, updated, or approved listings can be declined (current: ${currentStatus})`,
       });
     }
 
@@ -45,14 +100,20 @@ async function moderateListing(req, res, { status, message, requireReason = fals
     const declineReason =
       status === LISTING_STATUS.DECLINED ? reason || null : null;
 
+    const moderatorId = req.adminId || null;
+    const allowedSources = allowedSourceStatusesFor(status);
+
     const result = await pool.query(
       `UPDATE listings
        SET status = $1,
            decline_reason = $2,
+           approved_or_rejected_at = CURRENT_TIMESTAMP,
+           moderated_by_admin_id = $3,
+           resubmitted_at = NULL,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = $3 AND status <> ALL($4::text[])
+       WHERE id = $4 AND status = ANY($5::text[])
        RETURNING *`,
-      [status, declineReason, id, TERMINAL_LISTING_STATUSES]
+      [status, declineReason, moderatorId, id, allowedSources]
     );
 
     if (result.rows.length === 0) {
@@ -60,28 +121,67 @@ async function moderateListing(req, res, { status, message, requireReason = fals
     }
 
     const listing = result.rows[0];
-    const notify =
-      status === LISTING_STATUS.APPROVED ? notifyListingApproved : notifyListingRejected;
+    const decliningApproved =
+      status === LISTING_STATUS.DECLINED &&
+      currentStatus === LISTING_STATUS.APPROVED;
 
-    await notify(pool, {
-      userId: listing.user_id,
-      listingId: listing.id,
-      deviceName: await getListingDeviceName(pool, listing.id),
-      reason: reason || undefined,
-    });
+    try {
+      await recordListingModerationEvent(pool, {
+        eventType:
+          status === LISTING_STATUS.APPROVED ? EVENT_TYPE.APPROVED : EVENT_TYPE.DECLINED,
+        listingId: listing.id,
+        previousListingId: listing.previous_listing_id || null,
+        rootListingId: listing.root_listing_id || listing.id,
+        userId: listing.user_id,
+        previousStatus: currentStatus,
+        newStatus: listing.status,
+        price: listing.price,
+        declineReason: declineReason,
+        moderatedByAdminId: moderatorId,
+      });
+    } catch (eventError) {
+      console.error('Failed to record listing moderation event:', eventError.message);
+    }
+
+    if (status === LISTING_STATUS.APPROVED) {
+      await notifyListingApproved(pool, {
+        userId: listing.user_id,
+        listingId: listing.id,
+        deviceName: await getListingDeviceName(pool, listing.id),
+      });
+    } else if (decliningApproved) {
+      await notifyListingDeclinedFromApproved(pool, {
+        userId: listing.user_id,
+        listingId: listing.id,
+        reason: reason || undefined,
+      });
+    } else {
+      await notifyListingRejected(pool, {
+        userId: listing.user_id,
+        listingId: listing.id,
+        deviceName: await getListingDeviceName(pool, listing.id),
+        reason: reason || undefined,
+      });
+    }
 
     // Admin Web audit only (verifyAdminAuth sets req.adminId).
     if (req.adminId) {
+      let action;
+      if (status === LISTING_STATUS.APPROVED) {
+        action = 'listing.approve';
+      } else if (decliningApproved) {
+        action = 'DECLINE_APPROVED_LISTING';
+      } else {
+        action = 'listing.decline';
+      }
+
       await writeAuditLog({
         adminId: req.adminId,
-        action:
-          status === LISTING_STATUS.APPROVED
-            ? 'listing.approve'
-            : 'listing.decline',
+        action,
         entityType: 'listing',
         entityId: listing.id,
         metadata: {
-          previous_status: current.rows[0].status,
+          previous_status: currentStatus,
           new_status: listing.status,
           reason: reason || null,
         },

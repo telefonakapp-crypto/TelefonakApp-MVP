@@ -104,9 +104,52 @@ export function ReportsPage() {
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <DashboardCard label="Total Listings" value={overview.listings.total} />
+              <DashboardCard label="Logical Listings" value={overview.listings.logicalListings ?? 0} />
               <DashboardCard label="Pending Listings" value={overview.listings.pending} />
+              <DashboardCard
+                label="Resubmitted Queue"
+                value={overview.listings.resubmitted ?? 0}
+                hint="Currently awaiting re-review"
+              />
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <DashboardCard
+                label="Updated Queue"
+                value={overview.listings.updated ?? 0}
+                hint="Previously approved, edited by seller"
+              />
+              <DashboardCard
+                label="Resubmissions Received"
+                value={overview.listings.resubmissionsReceived ?? 0}
+                hint="All-time resubmission events"
+              />
+              <DashboardCard
+                label="Resubmissions (Month)"
+                value={overview.listings.resubmissionsReceivedThisMonth ?? 0}
+                hint="Events this month; kept after approve"
+              />
+              <DashboardCard
+                label="Updates (Month)"
+                value={overview.listings.updatesReceivedThisMonth ?? 0}
+                hint="Approved-edit events this month"
+              />
               <DashboardCard label="Approved Listings" value={overview.listings.approved} />
+              <DashboardCard label="Declined Listings" value={overview.listings.declined} />
+            </div>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <DashboardCard
+                label="Approved (Month)"
+                value={overview.listings.approvedThisMonth ?? 0}
+              />
+              <DashboardCard
+                label="Declined (Month)"
+                value={overview.listings.declinedThisMonth ?? 0}
+              />
               <DashboardCard label="Sold Listings" value={overview.listings.sold} />
+              <DashboardCard
+                label="Avg Revisions / Listing"
+                value={overview.listings.avgRevisionsPerListing ?? 0}
+              />
             </div>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
               <DashboardCard label="Total Offers" value={overview.offers.total} />

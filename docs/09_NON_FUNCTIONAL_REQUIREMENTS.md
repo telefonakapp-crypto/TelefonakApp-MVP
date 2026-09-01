@@ -1,0 +1,1 @@
+This file is an unused placeholder. Operational requirements that exist in code (rate limits, maintenance mode, HTTPS expectations) are described in [README.md](../README.md) and [09_SECURITY.md](09_SECURITY.md) (historical).

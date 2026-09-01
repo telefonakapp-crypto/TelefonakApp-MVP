@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
-const { validateEnv, isProduction, getJwtSecret } = require('./config/env');
+const { validateEnv, isProduction, getCustomerJwtSecret, getAdminJwtSecret } = require('./config/env');
 const pool = require('./config/database');
 const { ensureDatabase } = require('./scripts/ensureDatabase');
 const authRoutes = require('./routes/auth');
@@ -16,6 +16,7 @@ const adminBannersRoutes = require('./routes/adminBanners');
 const adminAdminsRoutes = require('./routes/adminAdmins');
 const adminUsersRoutes = require('./routes/adminUsers');
 const adminReportsRoutes = require('./routes/adminReports');
+const adminModerationHistoryRoutes = require('./routes/adminModerationHistory');
 const adminSettingsRoutes = require('./routes/adminSettings');
 const adminAuditLogsRoutes = require('./routes/adminAuditLogs');
 const adminUploadRoutes = require('./routes/adminUpload');
@@ -26,10 +27,15 @@ const notificationsRoutes = require('./routes/notifications');
 const offersRoutes = require('./routes/offers');
 const uploadRoutes = require('./routes/upload');
 const catalogRoutes = require('./routes/catalog');
+const statusRoutes = require('./routes/status');
+const publicSettingsRoutes = require('./routes/publicSettings');
+const checkMaintenanceMode = require('./middleware/checkMaintenanceMode');
+const { isMaintenanceModeEnabled } = require('./utils/settings');
 
 try {
   validateEnv();
-  getJwtSecret();
+  getCustomerJwtSecret();
+  getAdminJwtSecret();
 } catch (error) {
   console.error('[env]', error.message);
   process.exit(1);
@@ -94,6 +100,11 @@ app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
+// Global maintenance gate for customer APIs. Admin + status/health are exempt.
+app.use('/api', checkMaintenanceMode);
+
+app.use('/api/status', statusRoutes);
+app.use('/api/settings/public', publicSettingsRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/profile/change-phone', phoneChangeRoutes);
@@ -105,6 +116,7 @@ app.use('/api/admin/banners', adminBannersRoutes);
 app.use('/api/admin/admins', adminAdminsRoutes);
 app.use('/api/admin/users', adminUsersRoutes);
 app.use('/api/admin/reports', adminReportsRoutes);
+app.use('/api/admin/moderation-history', adminModerationHistoryRoutes);
 app.use('/api/admin/settings', adminSettingsRoutes);
 app.use('/api/admin/audit-logs', adminAuditLogsRoutes);
 app.use('/api/admin/upload', adminUploadRoutes);
@@ -116,8 +128,19 @@ app.use('/api/offers', offersRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api', catalogRoutes);
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', message: 'Telefonak API is running' });
+app.get('/api/health', async (req, res) => {
+  try {
+    const maintenance = await isMaintenanceModeEnabled();
+    res.json({
+      status: maintenance ? 'maintenance' : 'OK',
+      maintenance,
+      message: maintenance
+        ? 'Telefonak is currently undergoing maintenance.'
+        : 'Telefonak API is running',
+    });
+  } catch (error) {
+    res.json({ status: 'OK', maintenance: false, message: 'Telefonak API is running' });
+  }
 });
 
 // 404 for unknown API routes

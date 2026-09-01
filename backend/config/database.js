@@ -1,7 +1,17 @@
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
 const dotenv = require('dotenv');
 
 dotenv.config();
+
+/**
+ * PostgreSQL DATE is a calendar day with no time and no timezone.
+ * pg's default parser turns it into a local-midnight JS Date, which
+ * res.json() then serializes via toISOString() — shifting the day by one
+ * for any client whose offset isn't UTC. Keep the raw YYYY-MM-DD text so a
+ * date-only value (e.g. users.date_of_birth) survives the round trip intact.
+ */
+const PG_TYPE_DATE = 1082;
+types.setTypeParser(PG_TYPE_DATE, (value) => value);
 
 const pool = new Pool({
   host: process.env.DB_HOST || 'localhost',

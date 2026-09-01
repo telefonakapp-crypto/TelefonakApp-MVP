@@ -7,7 +7,14 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "init-db": "node scripts/init-db.js",
-    "create-super-admin": "node scripts/create-super-admin.js"
+    "test:catalog": "node --test --test-concurrency=1 security-tests/suites/13-smartwatch-catalog.test.js security-tests/suites/99-teardown.test.js",
+    "test:phase2b": "node --test --test-concurrency=1 security-tests/suites/15-smartwatch-listing-api.test.js security-tests/suites/99-teardown.test.js",
+    "test:phase2c": "node --test --test-concurrency=1 security-tests/suites/16-smartwatch-attributes.test.js security-tests/suites/99-teardown.test.js",
+    "test:custom-listings": "node --test --test-concurrency=1 security-tests/suites/21-custom-listings.test.js security-tests/suites/99-teardown.test.js",
+    "generate:phone-catalog": "node scripts/generatePhoneCatalogSql.js",
+    "generate:watch-attributes": "node scripts/generateSmartwatchAttributesSql.js",
+    "create-super-admin": "node scripts/create-super-admin.js",
+    "test:security": "node security-tests/run.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

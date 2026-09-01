@@ -69,14 +69,62 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <DashboardCard label="Total Users" value={stats.totalUsers} />
         <DashboardCard label="Total Admins" value={stats.totalAdmins} />
-        <DashboardCard label="Active Listings" value={stats.activeListings} hint="Approved & live" />
-        <DashboardCard label="Pending Listings" value={stats.pendingListings} />
+        <DashboardCard
+          label="Active Listings"
+          value={stats.activeListings}
+          hint="Approved & live"
+          to="/listings?status=approved"
+        />
+        <DashboardCard
+          label="Pending Listings"
+          value={stats.pendingListings}
+          to="/listings?status=pending"
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <DashboardCard label="Approved Listings" value={stats.approvedListings} />
-        <DashboardCard label="Declined Listings" value={stats.declinedListings} />
-        <DashboardCard label="Sold Listings" value={stats.soldListings} />
+        <DashboardCard
+          label="Resubmitted Queue"
+          value={stats.resubmittedListings ?? 0}
+          hint="Awaiting re-review now"
+          to="/listings?status=resubmitted"
+        />
+        <DashboardCard
+          label="Updated Queue"
+          value={stats.updatedListings ?? 0}
+          hint="Currently awaiting moderation"
+          to="/listings?status=updated"
+        />
+        <DashboardCard
+          label="Resubmissions (Month)"
+          value={stats.resubmissionsReceivedThisMonth ?? 0}
+          hint="Historical events this month"
+          to="/moderation-history?type=resubmitted"
+        />
+        <DashboardCard
+          label="Updates (Month)"
+          value={stats.updatesReceivedThisMonth ?? 0}
+          hint="Historical events this month"
+          to="/moderation-history?type=updated"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <DashboardCard
+          label="Approved Listings"
+          value={stats.approvedListings}
+          to="/listings?status=approved"
+        />
+        <DashboardCard
+          label="Declined Listings"
+          value={stats.declinedListings}
+          to="/listings?status=declined"
+        />
+        <DashboardCard
+          label="Sold Listings"
+          value={stats.soldListings}
+          to="/listings?status=sold"
+        />
         <DashboardCard label="Active Banners" value={stats.activeBanners} />
       </div>
 

@@ -2,54 +2,15 @@ const express = require('express');
 const pool = require('../config/database');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
 const { resolveBaseUrl } = require('../utils/baseUrl');
-const {
-  normalizeMarketplaceSearch,
-  buildMarketplaceSearchClause,
-} = require('../utils/marketplaceSearch');
-const { LISTING_STATUS } = require('../utils/listingStatus');
+const { LISTING_STATUS, listingIsTipSql } = require('../utils/listingStatus');
 const { moderateListing } = require('../utils/moderateListing');
+const { writeAuditLog } = require('../utils/auditLog');
+const {
+  fetchAdminListingList,
+  fetchAdminListingRowById,
+} = require('../utils/listingQueries');
 
 const router = express.Router();
-
-const LIST_SELECT = `
-  l.id,
-  l.price,
-  l.status,
-  l.created_at,
-  l.updated_at,
-  l.battery_percentage,
-  l.location,
-  l.decline_reason,
-  m.name AS model_name,
-  b.id AS brand_id,
-  b.name AS brand_name,
-  s.capacity_gb,
-  c.name AS color_name,
-  cond.name AS condition_name,
-  u.id AS seller_id,
-  u.first_name AS seller_first_name,
-  u.last_name AS seller_last_name,
-  u.phone_number AS seller_phone,
-  city.name_en AS city_name,
-  area.name_en AS area_name,
-  (SELECT image_url
-   FROM listing_images
-   WHERE listing_id = l.id
-   ORDER BY display_order
-   LIMIT 1) AS thumbnail_image
-`;
-
-const LIST_FROM = `
-  FROM listings l
-  JOIN models m ON l.model_id = m.id
-  JOIN brands b ON m.brand_id = b.id
-  JOIN storage_options s ON l.storage_id = s.id
-  JOIN colors c ON l.color_id = c.id
-  JOIN conditions cond ON l.condition_id = cond.id
-  JOIN users u ON l.user_id = u.id
-  LEFT JOIN cities city ON l.city_id = city.id
-  LEFT JOIN areas area ON l.area_id = area.id
-`;
 
 function absolutizeImageUrl(baseUrl, imageUrl) {
   if (!imageUrl) return null;
@@ -63,8 +24,18 @@ function sellerDisplayName(row) {
 
 function resolveLocation(row) {
   if (row.area_name && row.city_name) return `${row.area_name}, ${row.city_name}`;
-  if (row.city_name) return row.city_name;
   if (row.location) return row.location;
+  if (row.city_name) return row.city_name;
+  return null;
+}
+
+/** Display label for who moderated; "Auto Approval" when approved with no admin. */
+function resolveModeratedBy(row) {
+  if (!row.approved_or_rejected_at) return null;
+  if (row.moderated_by_admin_name) return row.moderated_by_admin_name;
+  if (row.status === LISTING_STATUS.APPROVED && !row.moderated_by_admin_id) {
+    return 'Auto Approval';
+  }
   return null;
 }
 
@@ -84,6 +55,13 @@ function mapListItem(row, baseUrl) {
     battery_percentage: row.battery_percentage,
     location: resolveLocation(row),
     decline_reason: row.decline_reason,
+    approved_or_rejected_at: row.approved_or_rejected_at || null,
+    moderated_by_admin_id: row.moderated_by_admin_id || null,
+    moderated_by: resolveModeratedBy(row),
+    resubmitted_at: row.resubmitted_at || null,
+    previous_listing_id: row.previous_listing_id || null,
+    revision_number: row.revision_number || 1,
+    root_listing_id: row.root_listing_id || row.id,
     seller_id: row.seller_id,
     seller_name: sellerDisplayName(row),
     seller_phone: row.seller_phone,
@@ -98,7 +76,11 @@ function parsePositiveInt(value, fallback) {
 
 /**
  * GET /api/admin/listings
- * Paginated moderation queue with search + filters.
+ * Paginated listing browser with search + filters.
+ * "All statuses" (no status / status=all) returns every non-deleted *current*
+ * listing (revision tips only). Frozen historical snapshots stay out of this
+ * table and its counts; open them from revision / moderation history.
+ * Pending, Resubmitted, and Updated filters are the moderation queues.
  */
 router.get('/', verifyAdminAuth, async (req, res) => {
   try {
@@ -108,76 +90,29 @@ router.get('/', verifyAdminAuth, async (req, res) => {
     const status = typeof req.query.status === 'string' ? req.query.status.trim() : '';
     const brand = typeof req.query.brand === 'string' ? req.query.brand.trim() : '';
     const seller = typeof req.query.seller === 'string' ? req.query.seller.trim() : '';
-    const search = normalizeMarketplaceSearch(req.query.search);
-
-    const params = [];
-    const where = ["l.status <> 'deleted'"];
-
-    const pushParam = (value) => {
-      params.push(value);
-      return params.length;
-    };
+    const search = typeof req.query.search === 'string' ? req.query.search : '';
 
     if (status && status !== 'all') {
       const allowed = Object.values(LISTING_STATUS).filter((s) => s !== LISTING_STATUS.DELETED);
       if (!allowed.includes(status)) {
         return res.status(400).json({ error: 'Invalid status filter' });
       }
-      where.push(`l.status = $${pushParam(status)}`);
     }
 
-    if (brand) {
-      if (/^\d+$/.test(brand)) {
-        where.push(`b.id = $${pushParam(parseInt(brand, 10))}`);
-      } else {
-        where.push(`b.name ILIKE $${pushParam(`%${brand.replace(/[%_\\]/g, '')}%`)}`);
-      }
-    }
+    const { rows, totalItems } = await fetchAdminListingList(pool, {
+      status,
+      brand,
+      seller,
+      search,
+      limit,
+      offset,
+    });
 
-    if (seller) {
-      const sellerPattern = `%${seller.replace(/[%_\\]/g, '')}%`;
-      const idx = pushParam(sellerPattern);
-      where.push(`(
-        u.first_name ILIKE $${idx}
-        OR u.last_name ILIKE $${idx}
-        OR (u.first_name || ' ' || u.last_name) ILIKE $${idx}
-        OR u.phone_number ILIKE $${idx}
-      )`);
-    }
-
-    const searchClause = buildMarketplaceSearchClause(search, pushParam);
-    if (searchClause) {
-      where.push(searchClause);
-    }
-
-    const whereSql = where.join(' AND ');
-
-    const countResult = await pool.query(
-      `SELECT COUNT(*)::int AS total
-       ${LIST_FROM}
-       WHERE ${whereSql}`,
-      params
-    );
-
-    const totalItems = countResult.rows[0].total;
     const totalPages = totalItems === 0 ? 0 : Math.ceil(totalItems / limit);
-
-    const limitIdx = pushParam(limit);
-    const offsetIdx = pushParam(offset);
-
-    const listResult = await pool.query(
-      `SELECT ${LIST_SELECT}
-       ${LIST_FROM}
-       WHERE ${whereSql}
-       ORDER BY l.created_at DESC
-       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
-      params
-    );
-
     const baseUrl = resolveBaseUrl(req);
 
     res.json({
-      items: listResult.rows.map((row) => mapListItem(row, baseUrl)),
+      items: rows.map((row) => mapListItem(row, baseUrl)),
       pagination: {
         page,
         limit,
@@ -213,39 +148,7 @@ router.get('/:id(\\d+)', verifyAdminAuth, async (req, res) => {
   try {
     const { id } = req.params;
 
-    const listingResult = await pool.query(
-      `SELECT
-         l.*,
-         m.name AS model_name,
-         m.brand_id AS brand_id,
-         m.release_year,
-         m.chipset,
-         m.screen_size,
-         b.name AS brand_name,
-         s.capacity_gb,
-         c.name AS color_name,
-         c.hex_code AS color_hex,
-         cond.name AS condition_name,
-         sim.name AS sim_configuration_name,
-         u.id AS seller_id,
-         u.first_name AS seller_first_name,
-         u.last_name AS seller_last_name,
-         u.phone_number AS seller_phone,
-         city.name_en AS city_name,
-         area.name_en AS area_name
-       FROM listings l
-       JOIN models m ON l.model_id = m.id
-       JOIN brands b ON m.brand_id = b.id
-       JOIN storage_options s ON l.storage_id = s.id
-       JOIN colors c ON l.color_id = c.id
-       JOIN conditions cond ON l.condition_id = cond.id
-       LEFT JOIN sim_configurations sim ON l.sim_configuration_id = sim.id
-       JOIN users u ON l.user_id = u.id
-       LEFT JOIN cities city ON l.city_id = city.id
-       LEFT JOIN areas area ON l.area_id = area.id
-       WHERE l.id = $1`,
-      [id]
-    );
+    const listingResult = await fetchAdminListingRowById(pool, id);
 
     if (listingResult.rows.length === 0) {
       return res.status(404).json({ error: 'Listing not found' });
@@ -260,9 +163,81 @@ router.get('/:id(\\d+)', verifyAdminAuth, async (req, res) => {
     );
 
     const row = listingResult.rows[0];
+    const rootId = row.root_listing_id || row.id;
+
+    const historyResult = await pool.query(
+      `SELECT
+         h.id,
+         h.revision_number,
+         h.price,
+         h.status,
+         h.created_at,
+         h.resubmitted_at,
+         h.decline_reason,
+         h.approved_or_rejected_at,
+         h.moderated_by_admin_id,
+         moderator.full_name AS moderated_by_admin_name,
+         ${listingIsTipSql('h')} AS is_current
+       FROM listings h
+       LEFT JOIN admins moderator ON h.moderated_by_admin_id = moderator.id
+       WHERE h.root_listing_id = $1
+         AND h.status <> 'deleted'
+       ORDER BY h.revision_number DESC`,
+      [rootId]
+    );
+
+    let previousListing = null;
+    if (row.previous_listing_id) {
+      const parentResult = await pool.query(
+        `SELECT
+           p.id,
+           p.revision_number,
+           p.price,
+           p.status,
+           p.created_at,
+           p.decline_reason,
+           p.approved_or_rejected_at,
+           p.moderated_by_admin_id,
+           moderator.full_name AS moderated_by_admin_name
+         FROM listings p
+         LEFT JOIN admins moderator ON p.moderated_by_admin_id = moderator.id
+         WHERE p.id = $1`,
+        [row.previous_listing_id]
+      );
+      if (parentResult.rows.length > 0) {
+        const parent = parentResult.rows[0];
+        previousListing = {
+          id: parent.id,
+          revision_number: parent.revision_number || 1,
+          status: parent.status,
+          price: parent.price,
+          created_at: parent.created_at,
+          decline_reason: parent.decline_reason || null,
+          approved_or_rejected_at: parent.approved_or_rejected_at || null,
+          moderated_by_admin_id: parent.moderated_by_admin_id || null,
+          moderated_by: resolveModeratedBy(parent),
+        };
+      }
+    }
+
     const baseUrl = resolveBaseUrl(req);
     const description =
       row.description_en || row.description_ar || row.description || null;
+
+    const revisionHistory = historyResult.rows.map((h) => ({
+      id: h.id,
+      revision_number: h.revision_number || 1,
+      status: h.status,
+      price: h.price,
+      created_at: h.created_at,
+      resubmitted_at: h.resubmitted_at || null,
+      is_current: Boolean(h.is_current),
+      is_historical_snapshot: !h.is_current,
+      decline_reason: h.decline_reason || null,
+      approved_or_rejected_at: h.approved_or_rejected_at || null,
+      moderated_by_admin_id: h.moderated_by_admin_id || null,
+      moderated_by: resolveModeratedBy(h),
+    }));
 
     res.json({
       listing: {
@@ -270,9 +245,17 @@ router.get('/:id(\\d+)', verifyAdminAuth, async (req, res) => {
         brand_id: row.brand_id,
         brand_name: row.brand_name,
         model_name: row.model_name,
+        category_slug: row.category_slug || null,
+        listing_source: row.listing_source || 'catalog',
         capacity_gb: row.capacity_gb,
+        storage_display: row.storage_display || null,
+        custom_brand_name: row.custom_brand_name || null,
+        custom_model_name: row.custom_model_name || null,
         color_name: row.color_name,
+        color_display_name: row.color_display_name || row.color_name || null,
         color_hex: row.color_hex,
+        case_size_label: row.case_size_label || null,
+        watch_connectivity_name: row.watch_connectivity_name || null,
         condition_name: row.condition_name,
         battery_percentage: row.battery_percentage,
         price: row.price,
@@ -284,6 +267,13 @@ router.get('/:id(\\d+)', verifyAdminAuth, async (req, res) => {
         decline_reason: row.decline_reason,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        approved_or_rejected_at: row.approved_or_rejected_at || null,
+        moderated_by_admin_id: row.moderated_by_admin_id || null,
+        moderated_by: resolveModeratedBy(row),
+        resubmitted_at: row.resubmitted_at || null,
+        previous_listing_id: row.previous_listing_id || null,
+        revision_number: row.revision_number || 1,
+        root_listing_id: rootId,
         sim_configuration_name: row.sim_configuration_name,
         release_year: row.release_year,
         chipset: row.chipset,
@@ -295,6 +285,8 @@ router.get('/:id(\\d+)', verifyAdminAuth, async (req, res) => {
           full_name: sellerDisplayName(row),
           phone_number: row.seller_phone,
         },
+        previous_listing: previousListing,
+        revision_history: revisionHistory,
       },
       images: imagesResult.rows.map((img) => ({
         ...img,
@@ -329,5 +321,65 @@ router.post('/:id(\\d+)/decline', verifyAdminAuth, (req, res) =>
     requireReason: true,
   })
 );
+
+/**
+ * POST /api/admin/listings/:id/delete
+ * Soft-delete an approved listing (status → deleted). Removes it from the
+ * marketplace without creating a revision.
+ */
+router.post('/:id(\\d+)/delete', verifyAdminAuth, async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const current = await pool.query('SELECT id, status FROM listings WHERE id = $1', [id]);
+    if (current.rows.length === 0) {
+      return res.status(404).json({ error: 'Listing not found' });
+    }
+
+    const previousStatus = current.rows[0].status;
+    if (previousStatus !== LISTING_STATUS.APPROVED
+      && previousStatus !== LISTING_STATUS.PENDING
+      && previousStatus !== LISTING_STATUS.RESUBMITTED
+      && previousStatus !== LISTING_STATUS.UPDATED) {
+      return res.status(409).json({
+        error: `Only pending, resubmitted, updated, or approved listings can be deleted from Admin (current: ${previousStatus})`,
+      });
+    }
+
+    const result = await pool.query(
+      `UPDATE listings
+       SET status = $1,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2 AND status = $3
+       RETURNING *`,
+      [LISTING_STATUS.DELETED, id, previousStatus]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(409).json({ error: 'Listing status changed, please try again' });
+    }
+
+    const listing = result.rows[0];
+
+    if (req.adminId) {
+      await writeAuditLog({
+        adminId: req.adminId,
+        action: 'listing.delete',
+        entityType: 'listing',
+        entityId: listing.id,
+        metadata: {
+          previous_status: previousStatus,
+          new_status: listing.status,
+        },
+        req,
+      });
+    }
+
+    res.json({ message: 'Listing deleted successfully', listing });
+  } catch (error) {
+    console.error('Error deleting listing as admin:', error);
+    res.status(500).json({ error: 'Failed to delete listing' });
+  }
+});
 
 module.exports = router;

@@ -1,11 +1,22 @@
 const express = require('express');
 const router = express.Router();
-const jwt = require('jsonwebtoken');
 const { validationResult } = require('express-validator');
 const pool = require('../config/database');
 const verifyToken = require('../middleware/verifyToken');
-const { getJwtSecret } = require('../config/env');
-const { OTP_PURPOSE, issueOtp, consumeOtp, otpValidator, sendOtpError, OTP_TTL_MINUTES, shouldExposeOtpInResponse } = require('../utils/otp');
+const {
+  issueCustomerSession,
+  revokeAllUserSessions,
+} = require('../utils/customerAuth');
+const {
+  OTP_PURPOSE,
+  issueOtp,
+  consumeOtp,
+  otpValidator,
+  sendOtpError,
+  OTP_TTL_MINUTES,
+  shouldExposeOtpInResponse,
+  otpIssueSuccessFields,
+} = require('../utils/otp');
 const { normalizePhoneNumber, phoneNumberVariants, isSamePhoneNumber, phoneNumberValidator } = require('../utils/phone');
 const { otpRequestLimiter, otpVerifyLimiter } = require('../middleware/rateLimits');
 
@@ -28,13 +39,6 @@ const rejectInvalid = (req, res) => {
   res.status(400).json({ error: errors.array()[0].msg, errors: errors.array() });
   return true;
 };
-
-const signSessionToken = (user) =>
-  jwt.sign(
-    { userId: user.id, phoneNumber: user.phone_number },
-    getJwtSecret(),
-    { expiresIn: '30d' }
-  );
 
 const clearPendingChange = (userId) =>
   pool.query(
@@ -110,6 +114,7 @@ router.post('/request', otpRequestLimiter, [phoneNumberValidator('new_phone_numb
       new_phone_number: newPhoneNumber,
       expires_at: expiresAt,
       expires_in_minutes: OTP_TTL_MINUTES,
+      ...otpIssueSuccessFields(),
       ...(shouldExposeOtpInResponse() ? { otp: code } : {}),
     });
   } catch (error) {
@@ -190,10 +195,16 @@ router.post('/verify', otpVerifyLimiter, [otpValidator('otp')], async (req, res)
 
     const user = result.rows[0];
 
+    // Phone number changed — revoke prior refresh sessions and issue a fresh pair.
+    await revokeAllUserSessions(user.id);
+    const session = await issueCustomerSession(user, {
+      userAgent: req.get('user-agent') || null,
+      ip: req.ip || null,
+    });
+
     res.json({
       message: 'Phone number updated successfully',
-      // The old token still carries the previous number, so hand back a fresh one.
-      token: signSessionToken(user),
+      ...session,
       user,
     });
   } catch (error) {

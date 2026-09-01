@@ -1,6 +1,11 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../config/database');
 const { toPublicAdmin } = require('../utils/adminAuth');
+const {
+  getAdminJwtSecret,
+  ADMIN_JWT_ISS,
+  ADMIN_JWT_AUD,
+} = require('../config/env');
 
 /**
  * Verifies the dedicated Admin Web JWT and loads an active admin.
@@ -16,9 +21,24 @@ async function verifyAdminAuth(req, res, next) {
   }
 
   try {
-    const decoded = jwt.verify(token, require('../config/env').getJwtSecret());
+    let decoded;
+    try {
+      decoded = jwt.verify(token, getAdminJwtSecret(), {
+        issuer: ADMIN_JWT_ISS,
+        audience: ADMIN_JWT_AUD,
+      });
+    } catch (err) {
+      // Legacy admin tokens signed before Phase 3 iss/aud.
+      if (err.name === 'JsonWebTokenError') {
+        decoded = jwt.verify(token, getAdminJwtSecret());
+        if (decoded.iss && decoded.iss !== ADMIN_JWT_ISS) throw err;
+        if (decoded.aud && decoded.aud !== ADMIN_JWT_AUD) throw err;
+      } else {
+        throw err;
+      }
+    }
 
-    if (!decoded.adminId) {
+    if (!decoded.adminId || decoded.userId || decoded.typ === 'access') {
       return res.status(401).json({ error: 'Invalid admin token' });
     }
 

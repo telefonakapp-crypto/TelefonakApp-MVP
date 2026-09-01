@@ -4,6 +4,7 @@ import { useAuth } from '../../hooks/useAuth';
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', end: true, superAdminOnly: false },
   { to: '/listings', label: 'Listings', end: false, superAdminOnly: false },
+  { to: '/moderation-history', label: 'Moderation History', end: false, superAdminOnly: false },
   { to: '/users', label: 'Users', end: false, superAdminOnly: false },
   { to: '/banners', label: 'Banners', end: false, superAdminOnly: false },
   { to: '/notifications', label: 'Notifications', end: false, superAdminOnly: false },

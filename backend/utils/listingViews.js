@@ -16,7 +16,11 @@ const VIEW_COOLDOWN_MINUTES = 30;
  */
 async function recordListingView(pool, { listingId, userId = null, ipAddress = null }) {
   const listingResult = await pool.query(
-    'SELECT id, user_id, status, views FROM listings WHERE id = $1',
+    `SELECT id, user_id, status, views,
+            EXISTS (
+              SELECT 1 FROM listings child WHERE child.previous_listing_id = listings.id
+            ) AS is_superseded
+     FROM listings WHERE id = $1`,
     [listingId]
   );
 
@@ -28,6 +32,7 @@ async function recordListingView(pool, { listingId, userId = null, ipAddress = n
   const isOwner = userId !== null && listing.user_id === userId;
   const canCount =
     VIEWABLE_LISTING_STATUSES.includes(listing.status) &&
+    !listing.is_superseded &&
     !isOwner &&
     (userId !== null || Boolean(ipAddress));
 

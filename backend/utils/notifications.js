@@ -11,6 +11,10 @@
 
 const NOTIFICATION_TYPES = {
   LISTING_APPROVED: 'listing_approved',
+  LISTING_LIVE: 'listing_live',
+  LISTING_SUBMITTED: 'listing_submitted',
+  LISTING_RESUBMITTED: 'listing_resubmitted',
+  LISTING_UPDATED: 'listing_updated',
   LISTING_REJECTED: 'listing_rejected',
   LISTING_SOLD: 'listing_sold',
   LISTING_HIDDEN: 'listing_hidden',
@@ -77,18 +81,20 @@ async function safeCreateNotification(pool, notification) {
 
 /** "Apple iPhone 15 Pro", or null when the listing or its catalog rows are gone. */
 async function getListingDeviceName(pool, listingId) {
+  const { formatListingDeviceName } = require('./listingCustom');
   const result = await pool.query(
-    `SELECT b.name AS brand_name, m.name AS model_name
+    `SELECT COALESCE(b.name, l.custom_brand_name) AS brand_name,
+            COALESCE(m.name, l.custom_model_name) AS model_name
      FROM listings l
-     JOIN models m ON l.model_id = m.id
-     JOIN brands b ON m.brand_id = b.id
+     LEFT JOIN models m ON l.model_id = m.id
+     LEFT JOIN brands b ON m.brand_id = b.id
      WHERE l.id = $1`,
     [listingId]
   );
 
   if (result.rows.length === 0) return null;
   const { brand_name, model_name } = result.rows[0];
-  return `${brand_name} ${model_name}`.trim();
+  return formatListingDeviceName(brand_name, model_name);
 }
 
 const describeListing = (deviceName) => (deviceName ? `"${deviceName}"` : 'listing');
@@ -103,6 +109,60 @@ function notifyListingApproved(pool, { userId, listingId, deviceName }) {
   });
 }
 
+/**
+ * Auto-approve path: listing was never pending, so avoid "has been approved" copy.
+ */
+function notifyListingLive(pool, { userId, listingId, deviceName }) {
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.LISTING_LIVE,
+    title: 'Listing Live',
+    message: `Your listing ${describeListing(deviceName)} is now live.`,
+  });
+}
+
+/**
+ * Manual-moderation path: listing created as pending — tell the seller it awaits review.
+ */
+function notifyListingSubmitted(pool, { userId, listingId, deviceName }) {
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.LISTING_SUBMITTED,
+    title: 'Listing Submitted',
+    message: `Your listing ${describeListing(deviceName)} has been submitted and is awaiting approval.`,
+  });
+}
+
+/**
+ * Seller edited a previously declined listing — awaiting another admin review.
+ * Distinct from Listing Submitted so first-time and re-review paths stay separate.
+ */
+function notifyListingResubmitted(pool, { userId, listingId, deviceName }) {
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.LISTING_RESUBMITTED,
+    title: 'Listing Resubmitted',
+    message: 'Your listing has been resubmitted for review.',
+  });
+}
+
+/**
+ * Seller edited a previously approved listing — awaiting another admin review.
+ * Distinct from resubmitted so declined re-submits and live-listing edits stay separate.
+ */
+function notifyListingUpdated(pool, { userId, listingId, deviceName }) {
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.LISTING_UPDATED,
+    title: 'Listing Updated',
+    message: 'Your listing has been updated and is awaiting review.',
+  });
+}
+
 function notifyListingRejected(pool, { userId, listingId, deviceName, reason }) {
   const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
   const reasonText = trimmedReason ? ` Reason: ${trimmedReason}` : '';
@@ -113,6 +173,23 @@ function notifyListingRejected(pool, { userId, listingId, deviceName, reason }) 
     type: NOTIFICATION_TYPES.LISTING_REJECTED,
     title: 'Listing Rejected',
     message: `Your listing ${describeListing(deviceName)} was rejected.${reasonText}`,
+  });
+}
+
+/**
+ * Seller notice when an already-live (approved) listing is pulled for policy.
+ * Distinct copy from queue rejection — the listing was on the marketplace.
+ */
+function notifyListingDeclinedFromApproved(pool, { userId, listingId, reason }) {
+  const trimmedReason = typeof reason === 'string' ? reason.trim() : '';
+  const reasonBlock = trimmedReason ? ` Reason: ${trimmedReason}` : '';
+
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.LISTING_REJECTED,
+    title: 'Listing Declined',
+    message: `Your listing has been removed from the marketplace because it no longer meets our listing guidelines.${reasonBlock}`,
   });
 }
 
@@ -244,6 +321,7 @@ async function notifyAdminsOfNewListing(
     price,
     sellerName,
     submittedAt,
+    title = 'New Listing Pending Approval',
   }
 ) {
   try {
@@ -271,7 +349,7 @@ async function notifyAdminsOfNewListing(
           adminId: admin.id,
           relatedListingId: listingId,
           type: NOTIFICATION_TYPES.NEW_LISTING,
-          title: 'New Listing Pending Approval',
+          title,
           message,
         })
       )
@@ -288,7 +366,12 @@ module.exports = {
   safeCreateNotification,
   getListingDeviceName,
   notifyListingApproved,
+  notifyListingLive,
+  notifyListingSubmitted,
+  notifyListingResubmitted,
+  notifyListingUpdated,
   notifyListingRejected,
+  notifyListingDeclinedFromApproved,
   notifyListingSold,
   notifyListingHidden,
   notifyListingActive,

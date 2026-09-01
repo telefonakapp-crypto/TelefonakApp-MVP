@@ -1,3 +1,5 @@
+> **Historical (July 2026 product planning).** Not an implementation contract. Current app: [README.md](../README.md) and [docs/README.md](README.md).
+
 # Telefonak - User Journey
 
 **Version:** 1.0

@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import axios from 'axios';
-import { API_BASE_URL } from '../utils/api';
+import apiClient from '../utils/api';
 
 /**
  * Fetches the officially-supported storage capacities and colors for a given model.
@@ -29,8 +28,8 @@ export function useModelOptions(modelId) {
     setLoadingModelOptions(true);
 
     Promise.all([
-      axios.get(`${API_BASE_URL}/models/${modelId}/storages`),
-      axios.get(`${API_BASE_URL}/models/${modelId}/colors`),
+      apiClient.get(`/models/${modelId}/storages`),
+      apiClient.get(`/models/${modelId}/colors`),
     ])
       .then(([storagesRes, colorsRes]) => {
         if (!cancelled) {

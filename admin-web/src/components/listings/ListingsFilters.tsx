@@ -17,6 +17,8 @@ type ListingsFiltersProps = {
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
+  { value: 'resubmitted', label: 'Resubmitted' },
+  { value: 'updated', label: 'Updated' },
   { value: 'pending', label: 'Pending' },
   { value: 'approved', label: 'Approved' },
   { value: 'declined', label: 'Declined' },

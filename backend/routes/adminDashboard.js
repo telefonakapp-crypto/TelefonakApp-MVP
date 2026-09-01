@@ -2,7 +2,12 @@ const express = require('express');
 const pool = require('../config/database');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
 const { resolveBaseUrl } = require('../utils/baseUrl');
-const { LISTING_STATUS } = require('../utils/listingStatus');
+const { LISTING_STATUS, LISTING_IS_TIP_SQL } = require('../utils/listingStatus');
+const {
+  LISTING_IDENTITY_JOINS,
+  LISTING_BRAND_NAME_SQL,
+  LISTING_MODEL_NAME_SQL,
+} = require('../utils/listingCatalog');
 
 const router = express.Router();
 
@@ -42,14 +47,31 @@ router.get('/', verifyAdminAuth, async (req, res) => {
   }
 
   try {
-    const [usersResult, adminsResult, listingStatusResult, bannersResult, recentResult] =
+    const [usersResult, adminsResult, listingStatusResult, revisionMetricsResult, bannersResult, recentResult] =
       await Promise.all([
         pool.query('SELECT COUNT(*)::int AS count FROM users'),
         pool.query('SELECT COUNT(*)::int AS count FROM admins'),
         pool.query(
           `SELECT status, COUNT(*)::int AS count
-           FROM listings
+           FROM listings l
+           WHERE ${LISTING_IS_TIP_SQL}
            GROUP BY status`
+        ),
+        pool.query(
+          `SELECT
+             COUNT(*) FILTER (WHERE event_type = 'resubmitted')::int AS resubmissions_received,
+             COUNT(*) FILTER (
+               WHERE event_type = 'resubmitted'
+                 AND occurred_at >= date_trunc('month', CURRENT_TIMESTAMP)
+                 AND occurred_at < date_trunc('month', CURRENT_TIMESTAMP) + INTERVAL '1 month'
+             )::int AS resubmissions_received_this_month,
+             COUNT(*) FILTER (WHERE event_type = 'updated')::int AS updates_received,
+             COUNT(*) FILTER (
+               WHERE event_type = 'updated'
+                 AND occurred_at >= date_trunc('month', CURRENT_TIMESTAMP)
+                 AND occurred_at < date_trunc('month', CURRENT_TIMESTAMP) + INTERVAL '1 month'
+             )::int AS updates_received_this_month
+           FROM listing_moderation_events`
         ),
         pool.query(
           `SELECT COUNT(*)::int AS count
@@ -62,8 +84,8 @@ router.get('/', verifyAdminAuth, async (req, res) => {
              l.price,
              l.status,
              l.created_at,
-             b.name AS brand_name,
-             m.name AS model_name,
+             ${LISTING_BRAND_NAME_SQL} AS brand_name,
+             ${LISTING_MODEL_NAME_SQL} AS model_name,
              u.first_name AS seller_first_name,
              u.last_name AS seller_last_name,
              (SELECT image_url
@@ -72,9 +94,10 @@ router.get('/', verifyAdminAuth, async (req, res) => {
               ORDER BY display_order
               LIMIT 1) AS thumbnail_image
            FROM listings l
-           JOIN models m ON m.id = l.model_id
-           JOIN brands b ON b.id = m.brand_id
+           ${LISTING_IDENTITY_JOINS}
            JOIN users u ON u.id = l.user_id
+           WHERE ${LISTING_IS_TIP_SQL}
+             AND l.status <> 'deleted'
            ORDER BY l.created_at DESC
            LIMIT 5`
         ),
@@ -82,6 +105,7 @@ router.get('/', verifyAdminAuth, async (req, res) => {
 
     const statusRows = listingStatusResult.rows;
     const approvedListings = countByStatus(statusRows, LISTING_STATUS.APPROVED);
+    const revisionMetrics = revisionMetricsResult.rows[0];
     const baseUrl = resolveBaseUrl(req);
 
     const recentListings = recentResult.rows.map((row) => ({
@@ -105,6 +129,14 @@ router.get('/', verifyAdminAuth, async (req, res) => {
         totalAdmins: adminsResult.rows[0].count,
         activeListings: approvedListings,
         pendingListings: countByStatus(statusRows, LISTING_STATUS.PENDING),
+        // Current re-review queues
+        resubmittedListings: countByStatus(statusRows, LISTING_STATUS.RESUBMITTED),
+        updatedListings: countByStatus(statusRows, LISTING_STATUS.UPDATED),
+        // Durable month-end: revision rows created this month (survives later approve)
+        resubmissionsReceivedThisMonth: revisionMetrics.resubmissions_received_this_month,
+        resubmissionsReceived: revisionMetrics.resubmissions_received,
+        updatesReceivedThisMonth: revisionMetrics.updates_received_this_month,
+        updatesReceived: revisionMetrics.updates_received,
         approvedListings,
         declinedListings: countByStatus(statusRows, LISTING_STATUS.DECLINED),
         soldListings: countByStatus(statusRows, LISTING_STATUS.SOLD),

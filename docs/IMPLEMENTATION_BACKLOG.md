@@ -1,3 +1,5 @@
+> **Historical (July 2026 planning backlog).** Many items have shipped. Current architecture: [docs/README.md](README.md). Do not treat open checkboxes here as the live work queue.
+
 # Telefonak — Implementation Backlog
 
 **Version:** 1.0  

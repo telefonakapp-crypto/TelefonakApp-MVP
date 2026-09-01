@@ -63,6 +63,7 @@ router.get('/overview', async (req, res) => {
     const [
       usersAgg,
       listingsAgg,
+      eventsAgg,
       offersByStatus,
       bannersAgg,
     ] = await Promise.all([
@@ -80,23 +81,67 @@ router.get('/overview', async (req, res) => {
         `SELECT
            COUNT(*)::int AS total,
            COUNT(*) FILTER (WHERE status = $2)::int AS pending,
-           COUNT(*) FILTER (WHERE status = $3)::int AS approved,
-           COUNT(*) FILTER (WHERE status = $4)::int AS declined,
-           COUNT(*) FILTER (WHERE status = $5)::int AS sold,
-           COUNT(*) FILTER (WHERE status = $6)::int AS hidden,
+           COUNT(*) FILTER (WHERE status = $3)::int AS resubmitted,
+           COUNT(*) FILTER (WHERE status = $8)::int AS updated,
+           COUNT(*) FILTER (WHERE status = $4)::int AS approved,
+           COUNT(*) FILTER (WHERE status = $5)::int AS declined,
+           COUNT(*) FILTER (WHERE status = $6)::int AS sold,
+           COUNT(*) FILTER (WHERE status = $7)::int AS hidden,
            COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::int AS created_today,
            COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '7 days')::int AS created_this_week,
-           COUNT(*) FILTER (WHERE created_at >= date_trunc('month', CURRENT_TIMESTAMP))::int AS created_this_month
+           COUNT(*) FILTER (WHERE created_at >= date_trunc('month', CURRENT_TIMESTAMP))::int AS created_this_month,
+           COUNT(DISTINCT root_listing_id)::int AS logical_listings,
+           -- Durable revision volume (survives later approve/decline of the tip)
+           COUNT(*) FILTER (
+             WHERE previous_listing_id IS NOT NULL OR revision_number > 1
+           )::int AS resubmissions_received,
+           COUNT(*) FILTER (
+             WHERE (previous_listing_id IS NOT NULL OR revision_number > 1)
+               AND created_at >= date_trunc('month', CURRENT_TIMESTAMP)
+           )::int AS resubmissions_received_this_month,
+           COUNT(*) FILTER (
+             WHERE status = $5
+               AND COALESCE(approved_or_rejected_at, created_at) >= date_trunc('month', CURRENT_TIMESTAMP)
+           )::int AS declined_this_month,
+           COUNT(*) FILTER (
+             WHERE status = $4
+               AND COALESCE(approved_or_rejected_at, created_at) >= date_trunc('month', CURRENT_TIMESTAMP)
+           )::int AS approved_this_month,
+           ROUND(
+             CASE
+               WHEN COUNT(DISTINCT root_listing_id) = 0 THEN 0
+               ELSE COUNT(*)::numeric / COUNT(DISTINCT root_listing_id)::numeric
+             END,
+             2
+           ) AS avg_revisions_per_listing
          FROM listings
          WHERE status <> $1`,
         [
           LISTING_STATUS.DELETED,
           LISTING_STATUS.PENDING,
+          LISTING_STATUS.RESUBMITTED,
           LISTING_STATUS.APPROVED,
           LISTING_STATUS.DECLINED,
           LISTING_STATUS.SOLD,
           LISTING_STATUS.HIDDEN,
+          LISTING_STATUS.UPDATED,
         ]
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE event_type = 'resubmitted')::int AS resubmissions_received,
+           COUNT(*) FILTER (
+             WHERE event_type = 'resubmitted'
+               AND occurred_at >= date_trunc('month', CURRENT_TIMESTAMP)
+               AND occurred_at < date_trunc('month', CURRENT_TIMESTAMP) + INTERVAL '1 month'
+           )::int AS resubmissions_received_this_month,
+           COUNT(*) FILTER (WHERE event_type = 'updated')::int AS updates_received,
+           COUNT(*) FILTER (
+             WHERE event_type = 'updated'
+               AND occurred_at >= date_trunc('month', CURRENT_TIMESTAMP)
+               AND occurred_at < date_trunc('month', CURRENT_TIMESTAMP) + INTERVAL '1 month'
+           )::int AS updates_received_this_month
+         FROM listing_moderation_events`
       ),
       pool.query(
         `SELECT status, COUNT(*)::int AS count
@@ -127,6 +172,7 @@ router.get('/overview', async (req, res) => {
     ]);
 
     const listingCreated = listingsAgg.rows[0];
+    const eventCounts = eventsAgg.rows[0];
     const offerRows = offersByStatus.rows;
     const banners = bannersAgg.rows[0];
     const users = usersAgg.rows[0];
@@ -143,6 +189,9 @@ router.get('/overview', async (req, res) => {
       listings: {
         total: listingCreated.total,
         pending: listingCreated.pending,
+        // Current queues: rows still awaiting review
+        resubmitted: listingCreated.resubmitted,
+        updated: listingCreated.updated,
         approved: listingCreated.approved,
         declined: listingCreated.declined,
         sold: listingCreated.sold,
@@ -150,6 +199,16 @@ router.get('/overview', async (req, res) => {
         createdToday: listingCreated.created_today,
         createdThisWeek: listingCreated.created_this_week,
         createdThisMonth: listingCreated.created_this_month,
+        logicalListings: listingCreated.logical_listings,
+        // Durable revision metrics (do not drop when a tip is later approved)
+        revisionSnapshots: listingCreated.resubmissions_received,
+        resubmissionsReceived: eventCounts.resubmissions_received,
+        resubmissionsReceivedThisMonth: eventCounts.resubmissions_received_this_month,
+        updatesReceived: eventCounts.updates_received,
+        updatesReceivedThisMonth: eventCounts.updates_received_this_month,
+        declinedThisMonth: listingCreated.declined_this_month,
+        approvedThisMonth: listingCreated.approved_this_month,
+        avgRevisionsPerListing: Number(listingCreated.avg_revisions_per_listing),
       },
       offers: {
         total: offerRows.reduce((sum, row) => sum + Number(row.count), 0),

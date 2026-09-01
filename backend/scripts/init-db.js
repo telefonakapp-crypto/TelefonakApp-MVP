@@ -8,7 +8,7 @@ async function initDatabase() {
   try {
     const result = await ensureDatabase(pool);
     console.log(
-      `[db] init-db finished: ${result.filesApplied} scripts applied in ${result.durationMs}ms`
+      `[db] init-db finished: ${result.filesApplied} applied, ${result.filesSkipped} skipped${result.baselined ? ' (baseline)' : ''} in ${result.durationMs}ms`
     );
     process.exit(0);
   } catch (error) {

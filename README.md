@@ -1,301 +1,147 @@
-# Telefonak - Second-Hand Phone Marketplace
+# Telefonak
 
-A mobile application for buying and selling second-hand phones in Jordan, built with React Native (frontend) and Node.js (backend) with PostgreSQL database.
+Jordan marketplace for buying and selling second-hand **phones and smartwatches**.
 
-## Features
+Three apps, one API, one PostgreSQL database:
 
-- ✨ Beautiful splash screen
-- 📱 Onboarding screens
-- 🔐 Phone number authentication with OTP
-- 👤 User registration with profile information
-- 🎨 Modern gradient UI design
+- **Mobile** — Expo / React Native (JavaScript)
+- **API** — Node.js / Express (`backend/`, port **3000**)
+- **Admin Web** — Vite / React / TypeScript (`admin-web/`)
 
-## Tech Stack
+The running code is the source of truth. Index: [docs/README.md](docs/README.md).
 
-### Frontend
-- React Native (Expo)
-- React Navigation
-- AsyncStorage
-- Axios
+## What the product does today
 
-### Backend
-- Node.js
-- Express.js
-- PostgreSQL
-- JWT Authentication
-- Twilio (for SMS - configured but using mock in development)
+**Customers (mobile)**
 
-## Project Structure
+- Jordan phone + OTP auth (refresh tokens)
+- Browse approved listings (search + filters)
+- Phones and smartwatches; catalog models or custom “Other”
+- Create / edit listings (photos, moderation)
+- Favorites, offers, notifications
+- Hide / unhide, mark sold, delete own listings
+- Profile, change phone, deactivate account
+- English / Arabic, light / dark
 
-```
-Telefonak/
-├── backend/
-│   ├── config/
-│   │   └── database.js
-│   ├── database/
-│   │   └── schema.sql
-│   ├── routes/
-│   │   ├── auth.js
-│   │   └── user.js
-│   ├── .env.example
-│   └── server.js
-├── mobile/
-│   ├── src/
-│   │   └── screens/
-│   │       ├── SplashScreen.js
-│   │       ├── OnboardingScreen.js
-│   │       ├── LoginScreen.js
-│   │       ├── OTPScreen.js
-│   │       ├── RegisterScreen.js
-│   │       └── HomeScreen.js
-│   ├── App.js
-│   ├── app.json
-│   └── package.json
-└── README.md
+**Staff (Admin Web)**
+
+- Email + password (separate `admins` table)
+- Moderate listings, users, banners, reports, settings (including maintenance and auto-approve), audit logs
+- Super Admin manages other admins
+
+Marketplace visibility is **approved listings only**. Full status lifecycle: [docs/06_DATABASE.md](docs/06_DATABASE.md).
+
+## Architecture (short)
+
+```text
+mobile  --customer JWT-->  Express /api  -->  PostgreSQL
+admin   --admin JWT------>       |
 ```
 
-## Setup Instructions
+Home uses an **embedded bottom nav**, not a React Navigation tab navigator. Details: [docs/10_ARCHITECTURE.md](docs/10_ARCHITECTURE.md).
 
-### Backend Setup
+Auth split: [docs/14_AUTHENTICATION_ARCHITECTURE.md](docs/14_AUTHENTICATION_ARCHITECTURE.md).
 
-1. Install PostgreSQL and create a database:
+## Repository
+
+```text
+backend/     API, SQL, security tests
+mobile/       Expo app (`ios/` native project)
+admin-web/    Staff dashboard
+docs/         Current + historical docs
+```
+
+Root `npm start` / `npm dev` only proxy to `backend/`. Always `cd` into the app you are working on for `npm install`.
+
+There is no Node `engines` pin in package.json. The API security harness uses Node’s built-in test runner (Node 18+).
+
+## Local setup
+
+### 1. PostgreSQL
+
 ```sql
 CREATE DATABASE telefonak;
 ```
 
-2. Navigate to backend directory:
+### 2. Backend
+
 ```bash
 cd backend
-```
-
-3. Install dependencies:
-```bash
 npm install
-```
-
-4. Create `.env` file from `.env.example`:
-```bash
-cp .env.example .env
-```
-
-5. Update `.env` with your database credentials and JWT secret:
-```
-PORT=3000
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=telefonak
-DB_USER=postgres
-DB_PASSWORD=your_password
-JWT_SECRET=your_jwt_secret_key_here
-BASE_URL=http://localhost:3000
-TWILIO_ACCOUNT_SID=your_twilio_account_sid
-TWILIO_AUTH_TOKEN=your_twilio_auth_token
-TWILIO_PHONE_NUMBER=your_twilio_phone_number
-```
-
-`BASE_URL` is the public server origin used when the API builds absolute `/uploads/...` image URLs. On a physical device or staging host, set it to a reachable address (not `localhost`).
-
-6. Run the database schema:
-```bash
-psql -U postgres -d telefonak -f database/schema.sql
-```
-
-7. Start the server:
-```bash
-npm start
-# or for development with auto-reload
+cp env.example .env
+# Set DB_* , JWT_SECRET, BASE_URL, CORS_ORIGINS (see env.example)
 npm run dev
 ```
 
-### Mobile App Setup (native iOS)
+First start on an **empty** database applies the SQL catalog via `ensureDatabase` (48 files) and records them in `schema_migrations`. On an **already complete** database with empty tracking, it **baselines** filenames and does **not** replay historical SQL.
 
-Telefonak uses an Expo project with a generated native iOS app (`mobile/ios/`). **Expo Go is not the primary workflow.**
+Do not run `psql … schema.sql` by itself as “the” setup. Do not replay all SQL on a populated database. Full contract and production baseline: [docs/06_DATABASE.md](docs/06_DATABASE.md).
 
-Full details: [`docs/13_IOS_DEVELOPMENT_WORKFLOW.md`](docs/13_IOS_DEVELOPMENT_WORKFLOW.md)
+Optional: `npm run init-db` (same init, then exit). Uses whatever `DB_*` is in `.env` — do not point this at production as a special targeting step.
 
-1. Navigate to mobile directory:
+Create the first Super Admin:
+
+```bash
+cd backend
+npm run create-super-admin
+```
+
+### 3. Mobile (native iOS is the primary workflow)
+
+Expo Go is **not** the primary workflow. See [docs/13_IOS_DEVELOPMENT_WORKFLOW.md](docs/13_IOS_DEVELOPMENT_WORKFLOW.md).
+
 ```bash
 cd mobile
-```
-
-2. Install dependencies:
-```bash
 npm install
-```
-
-3. Ensure the backend is running on port 3000. Configure the API URL:
-
-```bash
-cp .env.example .env
-# Default EXPO_PUBLIC_API_URL=http://localhost:3000 works for iOS Simulator.
-# Android emulator: http://10.0.2.2:3000
-# Physical device:  http://YOUR_LAN_IP:3000
-```
-
-Then start Metro:
-```bash
+cp .env.example .env   # EXPO_PUBLIC_API_URL=http://localhost:3000
 npm start
+npx expo run:ios       # or npm run ios:native
 ```
 
-4. Build and launch the native Debug app on the iOS Simulator:
+Use the **Telefonak** simulator app, not Expo Go. Android emulator API URL: `http://10.0.2.2:3000`. Physical device: LAN IP.
+
+### 4. Admin Web
+
 ```bash
-npx expo run:ios
+cd admin-web
+cp .env.example .env   # VITE_API_URL=http://localhost:3000/api
+npm install
+npm run dev            # http://localhost:5173
 ```
 
-Use the **Telefonak** app on the simulator (not Expo Go). For when to run `prebuild`, when a native rebuild is required, and troubleshooting (“No script URL provided”, Metro issues), see the workflow doc above.
+Allow that origin in backend `CORS_ORIGINS`.
 
-## API Endpoints
-
-### Authentication
-
-- `POST /api/auth/request-otp` - Request OTP for phone number
-  - Body: `{ "phone_number": "0791234567" }`
-
-- `POST /api/auth/verify-otp` - Verify OTP
-  - Body: `{ "phone_number": "0791234567", "otp": "123456" }`
-
-### User
-
-- `POST /api/user/register` - Register/Update user profile
-  - Headers: `Authorization: Bearer <token>`
-  - Body: `{ "first_name": "...", "last_name": "...", "gender": "male|female|other", ... }`
-
-- `GET /api/user/profile` - Get user profile
-  - Headers: `Authorization: Bearer <token>`
-
-### Admin Web Authentication (email + password)
-
-Admin Web uses a **separate** `admins` table and JWT. It does **not** use mobile OTP or the `users` table.
-
-#### Final authentication architecture
-
-| Audience | Table | Credentials | Middleware | Clients |
-|----------|-------|-------------|------------|---------|
-| Marketplace customers | `users` | Phone + OTP | `verifyToken` | Mobile app |
-| Admin Web staff | `admins` | Email + password | `verifyAdminAuth` | Admin Web |
-
-These two systems are **completely independent**. There is no mobile administrator role and no `users.is_admin` column.
-
-**Create the first Super Admin** (run once; refuses if a `super_admin` already exists):
+## Testing
 
 ```bash
 cd backend
-
-# Non-interactive
-SUPER_ADMIN_EMAIL=admin@telefonak.com \
-SUPER_ADMIN_PASSWORD='your-secure-password' \
-SUPER_ADMIN_FULL_NAME='Telefonak Super Admin' \
-npm run create-super-admin
-
-# Or interactive prompts
-npm run create-super-admin
+npm run test:security
 ```
 
-Required backend env (same as mobile API): `JWT_SECRET`, database vars in `backend/.env` (see `backend/env.example`). Optional seed vars: `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD`, `SUPER_ADMIN_FULL_NAME`.
+Local API must be running. See [backend/security-tests/README.md](backend/security-tests/README.md). Last documented baseline: **201 passed, 0 failed, 22 suites** (re-run after API changes).
 
-**Login**
+Mobile util tests (Node, no Jest runner in package.json):
 
 ```bash
-curl -X POST http://localhost:3000/api/admin/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"admin@telefonak.com","password":"your-secure-password"}'
+cd mobile
+node src/utils/__tests__/listingOwnerCapabilities.test.js
+# other files in src/utils/__tests__/
 ```
 
-Example response:
+Admin: `cd admin-web && npm run lint` (oxlint). `npm run build` typechecks.
 
-```json
-{
-  "token": "<admin-jwt>",
-  "admin": {
-    "id": 1,
-    "full_name": "Telefonak Super Admin",
-    "email": "admin@telefonak.com",
-    "role": "super_admin",
-    "is_active": true,
-    "last_login": "...",
-    "created_at": "...",
-    "updated_at": "...",
-    "created_by": null,
-    "updated_by": null
-  }
-}
-```
+## Environment
 
-**Current admin**
+Copy from `backend/env.example`, `mobile/.env.example`, `admin-web/.env.example`. Important API vars: `PORT`, `DB_*`, `JWT_SECRET` (prefer `JWT_CUSTOMER_SECRET` / `JWT_ADMIN_SECRET`), `BASE_URL`, `CORS_ORIGINS`, `TWILIO_*` for production SMS, optional `TRUST_PROXY=1` behind nginx.
 
-```bash
-curl http://localhost:3000/api/admin/auth/me \
-  -H "Authorization: Bearer <admin-jwt>"
-```
+Non-production OTP defaults to `1234` and may be returned in JSON. Production OTP is random and never echoed.
 
-**Change password**
+## Production notes
 
-```bash
-curl -X POST http://localhost:3000/api/admin/auth/change-password \
-  -H "Authorization: Bearer <admin-jwt>" \
-  -H 'Content-Type: application/json' \
-  -d '{"current_password":"old-password","new_password":"new-secure-password"}'
-```
-
-Admin JWT payload: `{ adminId, email, role }` (30-day expiry). Roles are stored for later RBAC; only auth is enforced in this phase (`is_active`).
-
-## Admin Web Setup
-
-The Admin Dashboard is a separate Vite + React app in `admin-web/`. It talks to the same backend via Admin JWT (`/api/admin/auth/*`).
-
-1. Ensure the backend is running and a Super Admin exists (`npm run create-super-admin` in `backend/`).
-2. Configure CORS so the Admin Web origin is allowed (see `CORS_ORIGINS` in `backend/env.example`).
-3. Start Admin Web:
-
-```bash
-cd admin-web
-cp .env.example .env
-npm install
-npm run dev
-```
-
-Open `http://localhost:5173` and sign in with the Super Admin email/password.
-
-Production build:
-
-```bash
-cd admin-web
-npm run build
-# Serve the contents of dist/ behind HTTPS (nginx, CDN, etc.)
-```
-
-Set `VITE_API_URL` to your public API base including `/api` before building.
-
-## Production / Deployment Notes
-
-- Set `NODE_ENV=production`.
-- Require a strong `JWT_SECRET` (16+ chars), `BASE_URL`, and `CORS_ORIGINS`.
-- Set `TRUST_PROXY=1` when the API sits behind nginx or a load balancer (needed for accurate rate limiting).
-- Configure Twilio (`TWILIO_*`) for real OTP SMS. In production, OTP codes are random and are **not** returned in API responses.
-- Database migrations apply automatically on backend start via `ensureDatabase` (idempotent SQL files under `backend/database/`).
-- Keep regular PostgreSQL backups before and after deploys.
-- Prefer reverse-proxy TLS (HTTPS) terminating at nginx/Cloudflare; do not expose Postgres publicly.
-
-## Launch Readiness Checklist (summary)
-
-See Phase 10 report in the project handover notes. Before go-live verify:
-
-- [ ] Strong secrets and production env vars set
-- [ ] Postgres backups + restore tested
-- [ ] HTTPS on API and Admin Web
-- [ ] Twilio OTP delivery verified
-- [ ] Admin Super Admin credentials rotated from defaults
-- [ ] `/api/health` monitored
-- [ ] Rate limits and CORS allowlists confirmed
-
-## Development Notes
-
-- In non-production, OTP defaults to `1234` and may be returned in the API response for testing
-- In production, OTP is random and never echoed in JSON; configure Twilio for SMS
-- The app uses AsyncStorage to persist authentication state
-- Phone numbers should be in Jordanian format (07XXXXXXXX)
+- `NODE_ENV=production`, strong secrets, HTTPS, Twilio, Postgres backups.
+- First deploy of `schema_migrations` **must baseline** an existing populated DB. Procedure: [docs/06_DATABASE.md](docs/06_DATABASE.md).
+- Rolling back to a binary that **replays all SQL on boot** is unsafe against live data.
 
 ## License
 
 MIT
-

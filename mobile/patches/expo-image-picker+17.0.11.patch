@@ -1,0 +1,192 @@
+diff --git a/node_modules/expo-image-picker/ios/MediaHandler.swift b/node_modules/expo-image-picker/ios/MediaHandler.swift
+index 6e4fbe1..430aa8b 100644
+--- a/node_modules/expo-image-picker/ios/MediaHandler.swift
++++ b/node_modules/expo-image-picker/ios/MediaHandler.swift
+@@ -173,9 +173,43 @@ internal struct MediaHandler {
+     }
+ 
+     // If fast copy path failed or was not available because of the props
+-    // use slow path (existing implementation)
+-    let rawData = try await itemProvider.loadImageDataRepresentation()
++    // use slow path, then resilient fallbacks.
++    //
++    // On Apple Silicon iOS Simulator, PHPicker often advertises `public.jpeg`
++    // but NSItemProvider cannot load that representation
++    // ("Cannot load representation of type public.jpeg"). Falling back to
++    // UIImage / Photos framework keeps multi-select working.
++    do {
++      let rawData = try await itemProvider.loadImageDataRepresentation()
++      return try makeAssetInfo(
++        from: rawData,
++        selectedImage: selectedImage,
++        itemProvider: itemProvider
++      )
++    } catch {
++      if let fallback = try? await loadImageViaUIImageObject(
++        selectedImage: selectedImage,
++        itemProvider: itemProvider
++      ) {
++        return fallback
++      }
++
++      if let fallback = try? await loadImageViaPhotoLibraryAsset(
++        selectedImage: selectedImage,
++        itemProvider: itemProvider
++      ) {
++        return fallback
++      }
+ 
++      throw error
++    }
++  }
++
++  private func makeAssetInfo(
++    from rawData: Data,
++    selectedImage: PHPickerResult,
++    itemProvider: NSItemProvider
++  ) throws -> AssetInfo {
+     guard let image = UIImage(data: rawData) else {
+       throw Exception(name: "FailedCreatingUIImage", description: "")
+     }
+@@ -212,6 +246,80 @@ internal struct MediaHandler {
+     )
+   }
+ 
++  private func loadImageViaUIImageObject(
++    selectedImage: PHPickerResult,
++    itemProvider: NSItemProvider
++  ) async throws -> AssetInfo {
++    guard itemProvider.canLoadObject(ofClass: UIImage.self) else {
++      throw FailedToReadImageException()
++    }
++
++    let object = try await itemProvider.loadObject(ofClass: UIImage.self)
++    guard let image = (object as? UIImage)?.fixOrientation() else {
++      throw FailedToReadImageException()
++    }
++
++    guard let imageData = image.jpegData(compressionQuality: options.quality) else {
++      throw FailedToReadImageException()
++    }
++
++    let fileExtension = ".jpg"
++    let targetUrl = try generateUrl(withFileExtension: fileExtension)
++    try ImageUtils.write(imageData: imageData, to: targetUrl)
++
++    return AssetInfo(
++      assetId: selectedImage.assetIdentifier,
++      uri: targetUrl.absoluteString,
++      width: Double(image.size.width),
++      height: Double(image.size.height),
++      fileName: itemProvider.suggestedName.map { $0 + fileExtension },
++      fileSize: getFileSize(from: targetUrl),
++      mimeType: "image/jpeg",
++      base64: options.base64 ? imageData.base64EncodedString() : nil,
++      exif: nil
++    )
++  }
++
++  private func loadImageViaPhotoLibraryAsset(
++    selectedImage: PHPickerResult,
++    itemProvider: NSItemProvider
++  ) async throws -> AssetInfo {
++    guard let assetId = selectedImage.assetIdentifier else {
++      throw FailedToReadImageException()
++    }
++
++    let fetchResult = PHAsset.fetchAssets(withLocalIdentifiers: [assetId], options: nil)
++    guard let asset = fetchResult.firstObject else {
++      throw FailedToReadImageException()
++    }
++
++    let rawData: Data = try await withCheckedThrowingContinuation { continuation in
++      let requestOptions = PHImageRequestOptions()
++      requestOptions.isNetworkAccessAllowed = true
++      requestOptions.deliveryMode = .highQualityFormat
++      requestOptions.resizeMode = .none
++      requestOptions.version = .current
++
++      PHImageManager.default().requestImageDataAndOrientation(
++        for: asset,
++        options: requestOptions
++      ) { data, _, _, info in
++        if let data {
++          continuation.resume(returning: data)
++          return
++        }
++        let error = (info?[PHImageErrorKey] as? Error) ?? FailedToReadImageException()
++        continuation.resume(throwing: error)
++      }
++    }
++
++    return try makeAssetInfo(
++      from: rawData,
++      selectedImage: selectedImage,
++      itemProvider: itemProvider
++    )
++  }
++
+   // Unlike the case of regular images, we have to operate on original data of the image in order to preserve the exif data,
+   // otherwise it won't be possible to connect the image and video into a `PHLivePhoto` after reading it from the cache directory later.
+   // As a result a live photo photo cannot be compressed or edited.
+diff --git a/node_modules/expo-image-picker/ios/NSItemProvider+Async.swift b/node_modules/expo-image-picker/ios/NSItemProvider+Async.swift
+index 08cdf4c..e1746c2 100644
+--- a/node_modules/expo-image-picker/ios/NSItemProvider+Async.swift
++++ b/node_modules/expo-image-picker/ios/NSItemProvider+Async.swift
+@@ -1,5 +1,6 @@
+ import Foundation
+ import Photos
++import UniformTypeIdentifiers
+ 
+ internal extension NSItemProvider {
+   func loadObject(ofClass objectClass: any NSItemProviderReading.Type) async throws -> NSItemProviderReading? {
+@@ -15,16 +16,42 @@ internal extension NSItemProvider {
+   }
+ 
+   func loadImageDataRepresentation() async throws -> Data {
+-    return try await withCheckedThrowingContinuation { continuation in
+-      let preferredTypeIdentifier = self.registeredTypeIdentifiers()
+-        .compactMap { UTType($0) }
+-        .first { $0.conforms(to: .image) }?
+-        .identifier ?? UTType.image.identifier
+-      loadDataRepresentation(forTypeIdentifier: preferredTypeIdentifier) { data, error in
++    // Try every registered image UTI. On some iOS Simulator Photos assets the first
++    // identifier is `public.jpeg` but that representation cannot be loaded, while
++    // another registered type (or a later fallback) still can.
++    var typeIdentifiers = registeredTypeIdentifiers()
++      .compactMap { UTType($0) }
++      .filter { $0.conforms(to: .image) }
++      .map(\.identifier)
++
++    if typeIdentifiers.isEmpty {
++      typeIdentifiers = [
++        UTType.image.identifier,
++        UTType.jpeg.identifier,
++        UTType.png.identifier,
++        UTType.heic.identifier,
++      ]
++    }
++
++    var lastError: Error?
++    for typeIdentifier in typeIdentifiers {
++      do {
++        return try await loadDataRepresentationAsync(forTypeIdentifier: typeIdentifier)
++      } catch {
++        lastError = error
++      }
++    }
++
++    throw FailedToReadImageException().causedBy(lastError)
++  }
++
++  private func loadDataRepresentationAsync(forTypeIdentifier typeIdentifier: String) async throws -> Data {
++    try await withCheckedThrowingContinuation { continuation in
++      loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, error in
+         if let data {
+           continuation.resume(returning: data)
+         } else {
+-          continuation.resume(throwing: FailedToReadImageException().causedBy(error))
++          continuation.resume(throwing: error ?? FailedToReadImageException())
+         }
+       }
+     }

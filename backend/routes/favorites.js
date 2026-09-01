@@ -3,7 +3,11 @@ const router = express.Router();
 const pool = require('../config/database');
 // Sold and hidden listings drop out of favorites through this list, while the
 // favorite rows themselves are kept.
-const { PUBLIC_LISTING_STATUSES: VISIBLE_LISTING_STATUSES } = require('../utils/listingStatus');
+const {
+  PUBLIC_LISTING_STATUSES: VISIBLE_LISTING_STATUSES,
+  LISTING_IS_TIP_SQL,
+} = require('../utils/listingStatus');
+const { fetchFavoriteListings } = require('../utils/listingQueries');
 
 // Saved listings belong to other sellers, so their view counter stays hidden.
 const withoutViewCount = ({ views, ...listing }) => listing;
@@ -24,38 +28,10 @@ router.get('/', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
     const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
 
-    const result = await pool.query(
-      `SELECT
-         l.*,
-         f.created_at AS favorited_at,
-         m.name  AS model_name,
-         m.category_id,
-         b.name  AS brand_name,
-         s.capacity_gb,
-         c.name  AS color_name,
-         c.hex_code AS color_hex,
-         cond.name AS condition_name,
-         u.first_name,
-         u.last_name,
-         city.name_en AS city_name,
-         area.name_en AS area_name,
-         (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY display_order LIMIT 1) AS thumbnail_image
-       FROM favorites f
-       JOIN listings l ON l.id = f.listing_id
-       JOIN models m ON l.model_id = m.id
-       JOIN brands b ON m.brand_id = b.id
-       JOIN storage_options s ON l.storage_id = s.id
-       JOIN colors c ON l.color_id = c.id
-       JOIN conditions cond ON l.condition_id = cond.id
-       JOIN users u ON l.user_id = u.id
-       LEFT JOIN cities city ON l.city_id = city.id
-       LEFT JOIN areas area ON l.area_id = area.id
-       WHERE f.user_id = $1
-         AND l.status = ANY($2::text[])
-       ORDER BY f.created_at DESC
-       LIMIT $3 OFFSET $4`,
-      [req.user.userId, VISIBLE_LISTING_STATUSES, limit, offset]
-    );
+    const result = await fetchFavoriteListings(pool, req.user.userId, {
+      limit,
+      offset,
+    });
 
     res.json({ listings: result.rows.map(withoutViewCount) });
   } catch (error) {
@@ -72,7 +48,8 @@ router.get('/ids', async (req, res) => {
        FROM favorites f
        JOIN listings l ON l.id = f.listing_id
        WHERE f.user_id = $1
-         AND l.status = ANY($2::text[])`,
+         AND l.status = ANY($2::text[])
+         AND ${LISTING_IS_TIP_SQL}`,
       [req.user.userId, VISIBLE_LISTING_STATUSES]
     );
 
@@ -112,7 +89,11 @@ router.post('/:listingId', async (req, res) => {
 
   try {
     const listingResult = await pool.query(
-      'SELECT id, status FROM listings WHERE id = $1',
+      `SELECT id, status, user_id,
+              EXISTS (
+                SELECT 1 FROM listings child WHERE child.previous_listing_id = listings.id
+              ) AS is_superseded
+       FROM listings WHERE id = $1`,
       [listingId]
     );
 
@@ -120,7 +101,13 @@ router.post('/:listingId', async (req, res) => {
       return res.status(404).json({ error: 'Listing not found' });
     }
 
-    if (!VISIBLE_LISTING_STATUSES.includes(listingResult.rows[0].status)) {
+    const listing = listingResult.rows[0];
+
+    if (listing.user_id === req.user.userId) {
+      return res.status(403).json({ error: 'You cannot favorite your own listing' });
+    }
+
+    if (!VISIBLE_LISTING_STATUSES.includes(listing.status) || listing.is_superseded) {
       return res.status(400).json({ error: 'Listing is not available' });
     }
 

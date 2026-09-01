@@ -1,5 +1,15 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  fonts as tokenFonts,
+  radii as tokenRadii,
+  space as tokenSpace,
+  type as tokenType,
+  gradients as tokenGradients,
+  ambientElevation,
+  statusColors,
+  brand,
+} from '../utils/designTokens';
 
 const ThemeContext = createContext();
 
@@ -11,72 +21,86 @@ export const useTheme = () => {
   return context;
 };
 
+/** Re-export static tokens for convenience */
+export const fonts = tokenFonts;
+export const radii = tokenRadii;
+export const space = tokenSpace;
+export const type = tokenType;
+export const gradients = tokenGradients;
+
 const lightColors = {
-  // Background colors
-  background: '#f2f4f7',
+  background: '#f9f9f9',
+  surfaceContainerLow: '#f3f3f3',
+  surfaceContainer: '#eeeeee',
   surface: '#ffffff',
   card: '#ffffff',
-  
-  // Text colors
-  text: '#09090b',
-  textSecondary: '#71717a',
-  textMuted: '#a1a1aa',
-  
-  // Border colors
-  border: '#e2e8f0',
-  borderLight: '#f1f5f9',
-  
-  // Primary colors
-  primary: '#667eea',
-  primaryDark: '#5568d3',
-  
-  // Accent colors
-  accent: '#667eea',
-  error: '#ef4444',
-  success: '#10b981',
-  warning: '#f59e0b',
-  
-  // Special backgrounds
-  overlay: 'rgba(0, 0, 0, 0.5)',
-  shadow: '#000000',
-  
-  // Input backgrounds
-  inputBackground: '#f8fafc',
-  inputBorder: '#e2e8f0',
+
+  text: '#1a1c1c',
+  textSecondary: '#526069',
+  textMuted: '#7a848c',
+
+  border: 'rgba(193, 198, 212, 0.2)',
+  borderLight: 'rgba(193, 198, 212, 0.12)',
+  outlineVariant: '#c1c6d4',
+
+  // Telefonak brand primary
+  primary: brand.primary,
+  primaryDark: brand.primaryPressed,
+  primaryContainer: brand.primaryContainer,
+  primaryDeep: brand.primaryDeep,
+  onPrimary: brand.onPrimary,
+  focusAura: brand.focusAura,
+
+  accent: brand.primary,
+  error: brand.error,
+  success: brand.success,
+  successSoft: brand.successSoft,
+  warning: brand.warning,
+
+  overlay: 'rgba(26, 28, 28, 0.4)',
+  shadow: brand.ambientShadow,
+
+  inputBackground: '#ffffff',
+  inputBorder: 'rgba(193, 198, 212, 0.2)',
+
+  secondaryContainer: '#eeeeee',
 };
 
 const darkColors = {
-  // Background colors
-  background: '#09090b',
-  surface: '#18181b',
-  card: '#27272a',
-  
-  // Text colors
-  text: '#fafafa',
-  textSecondary: '#a1a1aa',
-  textMuted: '#71717a',
-  
-  // Border colors
-  border: '#3f3f46',
-  borderLight: '#27272a',
-  
-  // Primary colors
-  primary: '#818cf8',
-  primaryDark: '#667eea',
-  
-  // Accent colors
-  accent: '#818cf8',
+  background: '#121414',
+  surfaceContainerLow: '#1a1c1c',
+  surfaceContainer: '#222525',
+  surface: '#1e2121',
+  card: '#1e2121',
+
+  text: '#f2f4f4',
+  textSecondary: '#a8b0b6',
+  textMuted: '#7a848c',
+
+  border: 'rgba(193, 198, 212, 0.18)',
+  borderLight: 'rgba(193, 198, 212, 0.1)',
+  outlineVariant: '#c1c6d4',
+
+  primary: '#42A5F5',
+  primaryDark: brand.primary,
+  primaryContainer: brand.primary,
+  primaryDeep: brand.primaryDeep,
+  onPrimary: '#ffffff',
+  focusAura: 'rgba(66, 165, 245, 0.15)',
+
+  accent: '#42A5F5',
   error: '#f87171',
-  success: '#34d399',
+  success: '#4ade80',
+  successSoft: 'rgba(171, 244, 172, 0.25)',
   warning: '#fbbf24',
-  
-  // Special backgrounds
+
   overlay: 'rgba(0, 0, 0, 0.7)',
-  shadow: '#000000',
-  
-  // Input backgrounds
-  inputBackground: '#27272a',
-  inputBorder: '#3f3f46',
+  shadow: 'rgba(26, 28, 28, 0.35)',
+
+  inputBackground: '#1e2121',
+  inputBorder: 'rgba(193, 198, 212, 0.18)',
+
+  secondaryContainer: '#222525',
 };
 
 export const ThemeProvider = ({ children }) => {
@@ -84,14 +108,12 @@ export const ThemeProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Load theme preference from AsyncStorage
     const loadTheme = async () => {
       try {
         const savedTheme = await AsyncStorage.getItem('themeMode');
         if (savedTheme !== null) {
           setIsDarkMode(savedTheme === 'dark');
         } else {
-          // Default to light mode
           setIsDarkMode(false);
         }
       } catch (error) {
@@ -120,6 +142,13 @@ export const ThemeProvider = ({ children }) => {
   const value = {
     isDarkMode,
     colors,
+    fonts: tokenFonts,
+    radii: tokenRadii,
+    space: tokenSpace,
+    type: tokenType,
+    gradients: tokenGradients,
+    elevation: ambientElevation,
+    statusColors,
     toggleTheme,
     isLoading,
   };
@@ -130,4 +159,3 @@ export const ThemeProvider = ({ children }) => {
     </ThemeContext.Provider>
   );
 };
-

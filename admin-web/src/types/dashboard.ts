@@ -3,6 +3,15 @@ export type DashboardStats = {
   totalAdmins: number;
   activeListings: number;
   pendingListings: number;
+  /** Current re-review queue (status = resubmitted). */
+  resubmittedListings: number;
+  /** Current approved-edit queue (status = updated). */
+  updatedListings: number;
+  /** Revision snapshots created this month (durable month-end metric). */
+  resubmissionsReceivedThisMonth: number;
+  resubmissionsReceived: number;
+  updatesReceivedThisMonth: number;
+  updatesReceived: number;
   approvedListings: number;
   declinedListings: number;
   soldListings: number;

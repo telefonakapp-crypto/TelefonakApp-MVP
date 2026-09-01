@@ -2,8 +2,14 @@ const express = require('express');
 const pool = require('../config/database');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
 const { resolveBaseUrl } = require('../utils/baseUrl');
-const { LISTING_STATUS } = require('../utils/listingStatus');
+const { LISTING_STATUS, LISTING_IS_TIP_SQL } = require('../utils/listingStatus');
+const {
+  LISTING_IDENTITY_JOINS,
+  LISTING_BRAND_NAME_SQL,
+  LISTING_MODEL_NAME_SQL,
+} = require('../utils/listingCatalog');
 const { writeAuditLog } = require('../utils/auditLog');
+const { ADMIN_DEACTIVATION_REASON } = require('../utils/deactivateUser');
 
 const router = express.Router();
 
@@ -35,6 +41,8 @@ function mapUserListItem(row) {
     is_active: row.is_active !== false,
     is_verified: row.is_verified,
     created_at: row.created_at,
+    deactivated_at: row.deactivated_at || null,
+    deactivation_reason: row.deactivation_reason || null,
     total_listings: Number(row.total_listings) || 0,
   };
 }
@@ -113,10 +121,14 @@ router.get('/', async (req, res) => {
          u.is_active,
          u.is_verified,
          u.created_at,
+         u.deactivated_at,
+         u.deactivation_reason,
          (
            SELECT COUNT(*)::int
            FROM listings l
-           WHERE l.user_id = u.id AND l.status <> $${deletedStatusIdx}
+           WHERE l.user_id = u.id
+             AND l.status <> $${deletedStatusIdx}
+             AND ${LISTING_IS_TIP_SQL}
          ) AS total_listings
        FROM users u
        ${whereSql}
@@ -160,6 +172,8 @@ router.get('/:id(\\d+)', async (req, res) => {
          u.is_verified,
          u.created_at,
          u.updated_at,
+         u.deactivated_at,
+         u.deactivation_reason,
          COALESCE(ls.total_listings, 0) AS total_listings,
          COALESCE(ls.active_listings, 0) AS active_listings,
          COALESCE(ls.sold_listings, 0) AS sold_listings,
@@ -176,6 +190,7 @@ router.get('/:id(\\d+)', async (req, res) => {
            COUNT(*) FILTER (WHERE l.status = $6)::int AS declined_listings
          FROM listings l
          WHERE l.user_id = u.id
+           AND ${LISTING_IS_TIP_SQL}
        ) ls ON TRUE
        LEFT JOIN LATERAL (
          SELECT COUNT(*)::int AS favorites_count
@@ -204,17 +219,17 @@ router.get('/:id(\\d+)', async (req, res) => {
          l.price,
          l.status,
          l.created_at,
-         b.name AS brand_name,
-         m.name AS model_name,
+         ${LISTING_BRAND_NAME_SQL} AS brand_name,
+         ${LISTING_MODEL_NAME_SQL} AS model_name,
          (SELECT image_url
           FROM listing_images
           WHERE listing_id = l.id
           ORDER BY display_order
           LIMIT 1) AS thumbnail_image
        FROM listings l
-       JOIN models m ON m.id = l.model_id
-       JOIN brands b ON b.id = m.brand_id
+       ${LISTING_IDENTITY_JOINS}
        WHERE l.user_id = $1 AND l.status <> $2
+         AND ${LISTING_IS_TIP_SQL}
        ORDER BY l.created_at DESC
        LIMIT 20`,
       [id, LISTING_STATUS.DELETED]
@@ -236,6 +251,8 @@ router.get('/:id(\\d+)', async (req, res) => {
         is_verified: row.is_verified,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        deactivated_at: row.deactivated_at || null,
+        deactivation_reason: row.deactivation_reason || null,
         total_listings: Number(row.total_listings) || 0,
         active_listings: Number(row.active_listings) || 0,
         sold_listings: Number(row.sold_listings) || 0,
@@ -273,12 +290,24 @@ router.put('/:id(\\d+)/status', async (req, res) => {
     const { is_active } = req.body;
 
     const result = await pool.query(
-      `UPDATE users
-       SET is_active = $1, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $2
-       RETURNING id, first_name, last_name, phone_number, email, is_active,
-                 is_verified, created_at, updated_at`,
-      [is_active, id]
+      is_active
+        ? `UPDATE users
+           SET is_active = TRUE,
+               deactivated_at = NULL,
+               deactivation_reason = NULL,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1
+           RETURNING id, first_name, last_name, phone_number, email, is_active,
+                     is_verified, created_at, updated_at, deactivated_at, deactivation_reason`
+        : `UPDATE users
+           SET is_active = FALSE,
+               deactivated_at = COALESCE(deactivated_at, CURRENT_TIMESTAMP),
+               deactivation_reason = COALESCE(deactivation_reason, $2),
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1
+           RETURNING id, first_name, last_name, phone_number, email, is_active,
+                     is_verified, created_at, updated_at, deactivated_at, deactivation_reason`,
+      is_active ? [id] : [id, ADMIN_DEACTIVATION_REASON]
     );
 
     if (result.rows.length === 0) {
@@ -295,6 +324,8 @@ router.put('/:id(\\d+)/status', async (req, res) => {
         phone_number: row.phone_number,
         full_name: fullName(row),
         is_active: row.is_active,
+        deactivation_reason: row.deactivation_reason,
+        deactivated_at: row.deactivated_at,
       },
       req,
     });
@@ -312,6 +343,8 @@ router.put('/:id(\\d+)/status', async (req, res) => {
         is_verified: row.is_verified,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        deactivated_at: row.deactivated_at || null,
+        deactivation_reason: row.deactivation_reason || null,
       },
     });
   } catch (error) {

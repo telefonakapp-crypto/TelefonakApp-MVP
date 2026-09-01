@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { fetchListingBrands, fetchListings } from '../../services/listingsService';
 import { ListingsFilters } from '../../components/listings/ListingsFilters';
 import {
@@ -23,20 +24,44 @@ const DEFAULT_FILTERS: FiltersState = {
 };
 
 export function ListingsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const statusFromUrl = searchParams.get('status') || '';
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState<FiltersState>(DEFAULT_FILTERS);
+  const [filters, setFilters] = useState<FiltersState>({
+    ...DEFAULT_FILTERS,
+    status: statusFromUrl,
+  });
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const limit = 20;
 
+  useEffect(() => {
+    setFilters((prev) =>
+      prev.status === statusFromUrl ? prev : { ...prev, status: statusFromUrl }
+    );
+    setPage(1);
+  }, [statusFromUrl]);
+
   const handleFilterChange = useCallback((next: Partial<FiltersState>) => {
     setPage(1);
-    setFilters((prev) => ({ ...prev, ...next }));
-  }, []);
+    setFilters((prev) => {
+      const merged = { ...prev, ...next };
+      if (next.status !== undefined) {
+        const params = new URLSearchParams(searchParams);
+        if (merged.status) params.set('status', merged.status);
+        else params.delete('status');
+        setSearchParams(params, { replace: true });
+      }
+      return merged;
+    });
+  }, [searchParams, setSearchParams]);
 
   const handleClearFilters = useCallback(() => {
     setPage(1);
     setFilters(DEFAULT_FILTERS);
-  }, []);
+    const params = new URLSearchParams(searchParams);
+    params.delete('status');
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const queryParams = useMemo(
     () => ({
@@ -59,11 +84,15 @@ export function ListingsPage() {
   const listingsQuery = useQuery({
     queryKey: ['admin-listings', queryParams],
     queryFn: () => fetchListings(queryParams),
-    placeholderData: (previous) => previous,
+    // Always refetch on mount/filter change so All statuses never keeps a
+    // stale page after moderation (refetchOnWindowFocus is off globally).
+    refetchOnMount: 'always',
+    staleTime: 0,
   });
 
   const pagination = listingsQuery.data?.pagination;
   const items = listingsQuery.data?.items ?? [];
+  const declinedInView = items.filter((item) => item.status === 'declined').length;
 
   return (
     <div className="space-y-6">
@@ -107,6 +136,11 @@ export function ListingsPage() {
 
       {!listingsQuery.isLoading && !listingsQuery.isError ? (
         <>
+          <p className="text-xs text-slate-500">
+            Showing {items.length} on this page
+            {declinedInView > 0 ? ` · ${declinedInView} declined` : ''}
+            {pagination ? ` · ${pagination.totalItems} total` : ''}
+          </p>
           <ListingsTable items={items} onView={setSelectedId} />
 
           {pagination && pagination.totalPages > 0 ? (
@@ -142,7 +176,11 @@ export function ListingsPage() {
         </>
       ) : null}
 
-      <ListingDetailDrawer listingId={selectedId} onClose={() => setSelectedId(null)} />
+      <ListingDetailDrawer
+        listingId={selectedId}
+        onClose={() => setSelectedId(null)}
+        onSelectListing={setSelectedId}
+      />
     </div>
   );
 }

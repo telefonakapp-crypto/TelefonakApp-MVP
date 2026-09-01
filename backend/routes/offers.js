@@ -11,6 +11,11 @@ const {
 // Offers are only meaningful while a listing is live in the marketplace,
 // so hiding a listing also stops new offers.
 const { LISTING_STATUS } = require('../utils/listingStatus');
+const {
+  LISTING_IDENTITY_JOINS,
+  LISTING_BRAND_NAME_SQL,
+  LISTING_MODEL_NAME_SQL,
+} = require('../utils/listingCatalog');
 const OFFERABLE_LISTING_STATUS = LISTING_STATUS.APPROVED;
 const verifyToken = require('../middleware/verifyToken').requireUserId;
 
@@ -70,12 +75,14 @@ router.post('/:listingId', async (req, res) => {
 
     // The partial unique index on pending offers makes this the whole
     // "update instead of duplicate" rule, with no read-then-write race.
+    // Price updates also clear seller_seen_at so the seller sees it as new again.
     const result = await pool.query(
       `INSERT INTO offers (listing_id, buyer_id, seller_id, offered_price)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (listing_id, buyer_id) WHERE status = 'pending'
        DO UPDATE SET offered_price = EXCLUDED.offered_price,
-                     updated_at = CURRENT_TIMESTAMP
+                     updated_at = CURRENT_TIMESTAMP,
+                     seller_seen_at = NULL
        RETURNING *`,
       [listingId, buyerId, listing.user_id, offeredPrice]
     );
@@ -98,14 +105,33 @@ router.post('/:listingId', async (req, res) => {
   }
 });
 
+// GET /api/offers/received/unread-count — pending received offers not yet seen by seller
+router.get('/received/unread-count', async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT COUNT(*)::int AS unread
+       FROM offers
+       WHERE seller_id = $1
+         AND status = 'pending'
+         AND seller_seen_at IS NULL`,
+      [req.user.userId]
+    );
+
+    res.json({ unread: result.rows[0]?.unread || 0 });
+  } catch (error) {
+    console.error('Error fetching unread received offers count:', error);
+    res.status(500).json({ error: 'Failed to fetch unread offers count' });
+  }
+});
+
 // GET /api/offers/received — offers on the current user's listings
 router.get('/received', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT
          o.*,
-         b.name  AS brand_name,
-         m.name  AS model_name,
+         ${LISTING_BRAND_NAME_SQL}  AS brand_name,
+         ${LISTING_MODEL_NAME_SQL}  AS model_name,
          l.price AS listing_price,
          l.status AS listing_status,
          buyer.first_name AS buyer_first_name,
@@ -113,8 +139,7 @@ router.get('/received', async (req, res) => {
          (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY display_order LIMIT 1) AS thumbnail_image
        FROM offers o
        JOIN listings l ON l.id = o.listing_id
-       JOIN models m ON l.model_id = m.id
-       JOIN brands b ON m.brand_id = b.id
+       ${LISTING_IDENTITY_JOINS}
        JOIN users buyer ON buyer.id = o.buyer_id
        WHERE o.seller_id = $1
        ORDER BY CASE WHEN o.status = 'pending' THEN 0 ELSE 1 END, o.created_at DESC`,
@@ -128,14 +153,50 @@ router.get('/received', async (req, res) => {
   }
 });
 
+// PATCH /api/offers/:offerId/seen — seller acknowledges a received offer
+router.patch('/:offerId/seen', async (req, res) => {
+  const offerId = parsePositiveInt(req.params.offerId);
+  if (!offerId) {
+    return res.status(400).json({ error: 'Invalid offer ID' });
+  }
+
+  try {
+    const updated = await pool.query(
+      `UPDATE offers
+       SET seller_seen_at = COALESCE(seller_seen_at, CURRENT_TIMESTAMP),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND seller_id = $2 AND seller_seen_at IS NULL
+       RETURNING *`,
+      [offerId, req.user.userId]
+    );
+
+    if (updated.rows.length === 0) {
+      // Either not found, not owned, or already seen — distinguish ownership.
+      const existing = await pool.query(
+        `SELECT id, seller_seen_at FROM offers WHERE id = $1 AND seller_id = $2`,
+        [offerId, req.user.userId]
+      );
+      if (existing.rows.length === 0) {
+        return res.status(404).json({ error: 'Offer not found' });
+      }
+      return res.json({ offer: existing.rows[0], alreadySeen: true });
+    }
+
+    res.json({ offer: updated.rows[0], alreadySeen: false });
+  } catch (error) {
+    console.error('Error marking offer as seen:', error);
+    res.status(500).json({ error: 'Failed to mark offer as seen' });
+  }
+});
+
 // GET /api/offers/sent — offers the current user has made
 router.get('/sent', async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT
          o.*,
-         b.name  AS brand_name,
-         m.name  AS model_name,
+         ${LISTING_BRAND_NAME_SQL}  AS brand_name,
+         ${LISTING_MODEL_NAME_SQL}  AS model_name,
          l.price AS listing_price,
          l.status AS listing_status,
          seller.first_name AS seller_first_name,
@@ -145,8 +206,7 @@ router.get('/sent', async (req, res) => {
          (SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY display_order LIMIT 1) AS thumbnail_image
        FROM offers o
        JOIN listings l ON l.id = o.listing_id
-       JOIN models m ON l.model_id = m.id
-       JOIN brands b ON m.brand_id = b.id
+       ${LISTING_IDENTITY_JOINS}
        JOIN users seller ON seller.id = o.seller_id
        WHERE o.buyer_id = $1
        ORDER BY o.created_at DESC`,
@@ -190,7 +250,9 @@ const resolveOffer = async (req, res, { status, notify }) => {
 
     const updated = await pool.query(
       `UPDATE offers
-       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       SET status = $1,
+           seller_seen_at = COALESCE(seller_seen_at, CURRENT_TIMESTAMP),
+           updated_at = CURRENT_TIMESTAMP
        WHERE id = $2 AND seller_id = $3 AND status = 'pending'
        RETURNING *`,
       [status, offerId, req.user.userId]

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -14,34 +14,62 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useRoute, CommonActions } from '@react-navigation/native';
 import apiClient from '../utils/api';
-import { getApiErrorMessage, logApiError } from '../utils/apiError';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getApiErrorMessage, isNetworkError, logApiError } from '../utils/apiError';
+import * as AuthSession from '../utils/authSession';
 import { useLanguage } from '../context/LanguageContext';
-
-const RESEND_COOLDOWN_SECONDS = 60;
+import { fonts, brand, radii } from '../utils/designTokens';
+import {
+  OTP_RESEND_COOLDOWN_SECONDS,
+  classifyOtpRequestFailure,
+  formatOtpCooldownToast,
+  formatOtpRequestWindowToast,
+  getResendCooldownFromSuccess,
+  useOtpCooldown,
+} from '../utils/otpCooldown';
+import { showToast } from '../utils/toast';
 
 export default function OTPScreen() {
   const [otp, setOtp] = useState('');
-  const [loading, setLoading] = useState(false);
-  // Matches the server's resend cooldown, so the button unlocks exactly when a
-  // new code would be accepted.
-  const [timer, setTimer] = useState(RESEND_COOLDOWN_SECONDS);
+  const [verifying, setVerifying] = useState(false);
+  const [resending, setResending] = useState(false);
   const navigation = useNavigation();
   const route = useRoute();
-  const { t } = useLanguage();
+  const { t, isRTL } = useLanguage();
   // 'phone-change' reuses this screen for a logged-in user verifying a new
   // number; without it the screen behaves exactly as it did for login/sign up.
-  const { phoneNumber, isSignUp, purpose } = route.params || {};
+  const { phoneNumber, isSignUp, purpose, cooldownSeconds } = route.params || {};
   const isPhoneChange = purpose === 'phone-change';
 
-  useEffect(() => {
-    if (timer > 0) {
-      const interval = setInterval(() => {
-        setTimer((prev) => prev - 1);
-      }, 1000);
-      return () => clearInterval(interval);
+  const initialCooldown =
+    cooldownSeconds != null
+      ? Math.max(0, Math.ceil(Number(cooldownSeconds) || 0))
+      : OTP_RESEND_COOLDOWN_SECONDS;
+
+  const {
+    secondsLeft,
+    isCoolingDown,
+    startCooldown,
+    beginRequest,
+    endRequest,
+  } = useOtpCooldown(initialCooldown);
+
+  const persistSession = async (payload) => {
+    if (typeof AuthSession.setAuthSession === 'function') {
+      await AuthSession.setAuthSession(payload);
+      return;
     }
-  }, [timer]);
+    // Defensive fallback if a stale Metro bundle omitted the named export.
+    if (typeof AuthSession.setAuthToken === 'function' && payload?.token) {
+      await AuthSession.setAuthToken(
+        payload.token,
+        Object.prototype.hasOwnProperty.call(payload, 'refresh_token')
+          ? payload.refresh_token || null
+          : null
+      );
+      return;
+    }
+    throw new Error('Auth session storage is unavailable');
+  };
 
   const handleVerifyOTP = async () => {
     if (otp.length !== 4) {
@@ -49,7 +77,7 @@ export default function OTPScreen() {
       return;
     }
 
-    setLoading(true);
+    setVerifying(true);
     try {
       if (isPhoneChange) {
         // The server verifies against the pending change it stored, so the
@@ -58,7 +86,7 @@ export default function OTPScreen() {
 
         if (response.data?.token) {
           // The old token still carries the previous number.
-          await AsyncStorage.setItem('authToken', response.data.token);
+          await persistSession(response.data);
         }
 
         Alert.alert(t('common.success'), t('changePhone.success'), [
@@ -75,9 +103,13 @@ export default function OTPScreen() {
       if (response.data) {
         // New users finish registration; existing users (login or signup) go Home.
         if (response.data.isNewUser) {
-          navigation.replace('Register', { token: response.data.token });
+          // Persist the temporary verified session so Register (and app restart)
+          // use it — never leave a stale customer JWT as the active session.
+          await persistSession(response.data);
+          // navigate (not replace) so Complete Profile can go back to OTP.
+          navigation.navigate('Register', { token: response.data.token });
         } else {
-          await AsyncStorage.setItem('authToken', response.data.token);
+          await persistSession(response.data);
           navigation.dispatch(
             CommonActions.reset({
               index: 0,
@@ -88,51 +120,75 @@ export default function OTPScreen() {
       }
     } catch (error) {
       logApiError('OTPScreen.verifyOTP', error);
-      Alert.alert(
-        'Error',
-        getApiErrorMessage(error, 'Invalid OTP. Please try again.')
-      );
+
+      let message = 'Could not complete sign-in. Please try again.';
+      if (error?.response) {
+        // Only use OTP copy when the backend actually rejected the code.
+        message = getApiErrorMessage(error, 'Invalid or expired OTP. Please try again.');
+      } else if (isNetworkError(error)) {
+        message = getApiErrorMessage(error, 'Please check your internet connection and try again.');
+      } else if (
+        /auth session|SecureStore|is not a function|storage is unavailable/i.test(
+          String(error?.message || '')
+        )
+      ) {
+        message = 'Could not save your sign-in session. Please try again.';
+      }
+
+      Alert.alert('Error', message);
       setOtp('');
     } finally {
-      setLoading(false);
+      setVerifying(false);
     }
   };
 
   const handleResendOTP = async () => {
-    if (timer > 0) return;
+    if (isCoolingDown) {
+      showToast(formatOtpCooldownToast(secondsLeft));
+      return;
+    }
 
-    setLoading(true);
+    if (!beginRequest()) return;
+
+    setResending(true);
     try {
       const response = isPhoneChange
         ? await apiClient.post('/profile/change-phone/request', { new_phone_number: phoneNumber })
         : await apiClient.post('/auth/request-otp', { phone_number: phoneNumber });
 
       if (response.data) {
-        setTimer(RESEND_COOLDOWN_SECONDS);
+        startCooldown(getResendCooldownFromSuccess(response.data));
         setOtp('');
         if (response.data.otp) {
           Alert.alert('OTP', `Your OTP is: ${response.data.otp} (Development mode)`);
         }
       }
     } catch (error) {
-      // A refused resend tells us exactly how long the server wants us to wait.
-      logApiError('OTPScreen.resendOTP', error);
-      const retryAfter = error.response?.data?.retry_after_seconds;
-      if (retryAfter) {
-        setTimer(retryAfter);
+      const failure = classifyOtpRequestFailure(error);
+      if (failure.kind === 'resend_cooldown') {
+        startCooldown(failure.seconds);
+        showToast(formatOtpCooldownToast(failure.seconds));
+        return;
       }
-      Alert.alert(
-        'Error',
-        getApiErrorMessage(error, 'Failed to resend OTP. Please try again.')
-      );
+      if (failure.kind === 'request_window') {
+        // Hourly budget — do NOT drive the Resend countdown with multi-minute waits.
+        showToast(formatOtpRequestWindowToast(failure.seconds));
+        return;
+      }
+
+      logApiError('OTPScreen.resendOTP', error);
+      showToast(getApiErrorMessage(error, 'Failed to resend OTP. Please try again.'));
     } finally {
-      setLoading(false);
+      endRequest();
+      setResending(false);
     }
   };
 
   const goBack = () => {
     navigation.goBack();
   };
+
+  const busy = verifying || resending;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -144,7 +200,11 @@ export default function OTPScreen() {
           {/* Header */}
           <View style={styles.header}>
             <TouchableOpacity onPress={goBack} style={styles.backButton}>
-              <Ionicons name="arrow-back" size={24} color="#09090b" />
+              <Ionicons
+                name={isRTL ? 'arrow-forward' : 'arrow-back'}
+                size={24}
+                color="#09090b"
+              />
             </TouchableOpacity>
           </View>
 
@@ -168,17 +228,19 @@ export default function OTPScreen() {
                 maxLength={4}
                 autoFocus
               />
-              <View style={styles.otpBoxes}>
+              <View style={styles.otpTrack}>
                 {[0, 1, 2, 3].map((index) => (
-                  <View
-                    key={index}
-                    style={[
-                      styles.otpBox,
-                      otp.length === index && styles.otpBoxFocused,
-                    ]}
-                  >
-                    <Text style={styles.otpBoxText}>{otp[index] || ''}</Text>
-                  </View>
+                  <React.Fragment key={index}>
+                    {index > 0 ? <View style={styles.otpSeparator} /> : null}
+                    <View
+                      style={[
+                        styles.otpCell,
+                        otp.length === index && styles.otpCellFocused,
+                      ]}
+                    >
+                      <Text style={styles.otpBoxText}>{otp[index] || ''}</Text>
+                    </View>
+                  </React.Fragment>
                 ))}
               </View>
             </View>
@@ -186,20 +248,30 @@ export default function OTPScreen() {
             <View style={styles.resendContainer}>
               <TouchableOpacity
                 onPress={handleResendOTP}
-                disabled={timer > 0 || loading}
+                disabled={resending}
+                accessibilityState={{ disabled: isCoolingDown || resending }}
               >
-                <Text style={[styles.resendButton, (timer > 0 || loading) && styles.resendButtonDisabled]}>
-                  {timer > 0 ? `Resend Code in ${timer}s` : 'Resend Code'}
+                <Text
+                  style={[
+                    styles.resendButton,
+                    (isCoolingDown || resending) && styles.resendButtonDisabled,
+                  ]}
+                >
+                  {isCoolingDown
+                    ? `Resend code in ${secondsLeft}s`
+                    : resending
+                      ? 'Sending...'
+                      : 'Resend Code'}
                 </Text>
               </TouchableOpacity>
             </View>
 
             <TouchableOpacity
-              style={[styles.verifyButton, (loading || otp.length !== 4) && styles.verifyButtonDisabled]}
+              style={[styles.verifyButton, (busy || otp.length !== 4) && styles.verifyButtonDisabled]}
               onPress={handleVerifyOTP}
-              disabled={loading || otp.length !== 4}
+              disabled={busy || otp.length !== 4}
             >
-              {loading ? (
+              {verifying ? (
                 <ActivityIndicator color="#ffffff" />
               ) : (
                 <Text style={styles.verifyButtonText}>Verify Code</Text>
@@ -215,7 +287,7 @@ export default function OTPScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#ffffff',
+    backgroundColor: brand.surface,
   },
   keyboardView: {
     flex: 1,
@@ -225,87 +297,97 @@ const styles = StyleSheet.create({
     padding: 24, // p-6
   },
   header: {
-    height: 64, // h-16
+    height: 52,
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 24, // mb-6
+    marginBottom: 8,
   },
   backButton: {
     marginLeft: -12, // -ml-3 equivalent
     padding: 8,
   },
   formContainer: {
-    flex: 1,
+    flexGrow: 0,
   },
   titleContainer: {
-    marginBottom: 32, // space-y-8 equivalent
+    marginBottom: 28,
   },
   title: {
-    fontSize: 30, // text-3xl
-    fontWeight: 'bold',
-    color: '#09090b', // text-foreground
-    marginBottom: 8, // mb-2
+    fontFamily: fonts.display,
+    fontSize: 30,
+    color: brand.onSurface,
+    marginBottom: 10,
+    textAlign: 'left',
   },
   description: {
-    color: '#71717a', // text-muted-foreground
+    fontFamily: fonts.body,
+    color: brand.secondary,
     fontSize: 16,
     lineHeight: 24,
   },
   phoneNumberBold: {
-    fontWeight: '500',
-    color: '#09090b', // text-foreground
+    fontFamily: fonts.bodyMedium,
+    color: brand.onSurface,
   },
   otpContainer: {
     position: 'relative',
-    alignItems: 'center',
-    marginBottom: 32, // space-y-8
+    alignItems: 'stretch',
+    marginBottom: 20,
   },
   otpInput: {
     position: 'absolute',
     width: '100%',
-    height: 64,
+    height: 56,
     opacity: 0,
     zIndex: 1,
   },
-  otpBoxes: {
+  otpTrack: {
     flexDirection: 'row',
-    justifyContent: 'center',
+    alignItems: 'stretch',
+    height: 56,
+    backgroundColor: '#F2F4F7',
+    borderRadius: 16,
+    overflow: 'hidden',
   },
-  otpBox: {
-    width: 56, // w-14
-    height: 64, // h-16
-    borderRadius: 12, // rounded-xl
-    borderWidth: 2, // border-2
-    borderColor: '#e4e4e7', // border default
-    backgroundColor: '#ffffff',
+  otpSeparator: {
+    width: StyleSheet.hairlineWidth,
+    marginVertical: 14,
+    backgroundColor: 'rgba(193, 198, 212, 0.55)',
+  },
+  otpCell: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    marginHorizontal: 8, // gap-4 equivalent (16/2)
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
   },
-  otpBoxFocused: {
-    borderColor: '#667eea', // border-primary
+  otpCellFocused: {
+    borderBottomColor: brand.primary,
   },
   otpBoxText: {
-    fontSize: 24, // text-2xl
-    fontWeight: '600',
-    color: '#09090b',
+    fontFamily: fonts.display,
+    fontSize: 22,
+    color: brand.onSurface,
+    textAlign: 'center',
+    includeFontPadding: false,
   },
   resendContainer: {
     alignItems: 'center',
-    marginBottom: 32, // space-y-8
+    marginBottom: 28,
   },
   resendButton: {
-    color: '#667eea', // text-primary
-    fontSize: 16,
+    fontFamily: fonts.label,
+    color: brand.primary,
+    fontSize: 15,
   },
   resendButtonDisabled: {
     opacity: 0.5,
   },
   verifyButton: {
     width: '100%',
-    height: 48, // h-12
-    borderRadius: 12, // rounded-xl
-    backgroundColor: '#667eea', // primary color
+    height: 48,
+    borderRadius: radii.xl,
+    backgroundColor: brand.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -313,8 +395,8 @@ const styles = StyleSheet.create({
     opacity: 0.6,
   },
   verifyButtonText: {
+    fontFamily: fonts.labelBold,
     color: '#ffffff',
-    fontSize: 18, // text-lg
-    fontWeight: '600',
+    fontSize: 18,
   },
 });

@@ -101,6 +101,69 @@ async function getSetting(key, client = pool) {
   return settings[key];
 }
 
+/** Keys safe to expose to the mobile app / unauthenticated clients. */
+const PUBLIC_SETTING_KEYS = Object.freeze([
+  'marketplace_name',
+  'contact_email',
+  'contact_phone',
+]);
+
+/**
+ * Subset of marketplace settings for customer apps.
+ * Never includes moderation/admin-only flags (auto_approve, maintenance, limits, …).
+ */
+async function getPublicSettings(client = pool) {
+  const { settings } = await getAllSettings(client);
+  const publicSettings = {};
+  for (const key of PUBLIC_SETTING_KEYS) {
+    publicSettings[key] = settings[key];
+  }
+  return publicSettings;
+}
+
+/** Short-lived cache so maintenance checks do not hit the DB on every request. */
+const MAINTENANCE_CACHE_TTL_MS = 2000;
+let maintenanceCache = {
+  value: null,
+  expiresAt: 0,
+};
+
+function invalidateMaintenanceCache() {
+  maintenanceCache = { value: null, expiresAt: 0 };
+}
+
+/**
+ * Fast path for request middleware. Reads `maintenance_mode` with a small TTL cache.
+ * On DB failure, fail open (return false) so a settings outage does not brick the API;
+ * admins can still toggle once the DB recovers.
+ */
+async function isMaintenanceModeEnabled(client = pool) {
+  const now = Date.now();
+  if (maintenanceCache.value !== null && now < maintenanceCache.expiresAt) {
+    return maintenanceCache.value;
+  }
+
+  try {
+    const result = await client.query(
+      `SELECT value FROM settings WHERE key = 'maintenance_mode' LIMIT 1`
+    );
+    const raw = result.rows[0]?.value;
+    const enabled =
+      raw == null
+        ? parseSettingValue('maintenance_mode', SETTING_DEFAULTS.maintenance_mode)
+        : parseSettingValue('maintenance_mode', raw);
+
+    maintenanceCache = {
+      value: enabled,
+      expiresAt: now + MAINTENANCE_CACHE_TTL_MS,
+    };
+    return enabled;
+  } catch (error) {
+    console.error('[settings] Failed to read maintenance_mode:', error.message);
+    return false;
+  }
+}
+
 async function upsertSettings(updates, adminId, client = pool) {
   const allowedKeys = new Set(Object.keys(SETTING_DEFAULTS));
   const entries = Object.entries(updates || {});
@@ -154,6 +217,10 @@ async function upsertSettings(updates, adminId, client = pool) {
     );
   }
 
+  if (Object.prototype.hasOwnProperty.call(updates || {}, 'maintenance_mode')) {
+    invalidateMaintenanceCache();
+  }
+
   return getAllSettings(client);
 }
 
@@ -161,10 +228,14 @@ module.exports = {
   SETTING_DEFAULTS,
   BOOLEAN_KEYS,
   NUMBER_KEYS,
+  PUBLIC_SETTING_KEYS,
   parseSettingValue,
   serializeSettingValue,
   ensureDefaultSettings,
   getAllSettings,
   getSetting,
+  getPublicSettings,
+  isMaintenanceModeEnabled,
+  invalidateMaintenanceCache,
   upsertSettings,
 };

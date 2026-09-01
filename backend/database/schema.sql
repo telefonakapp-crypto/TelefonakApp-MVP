@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS users (
     phone_number VARCHAR(20) UNIQUE NOT NULL,
     first_name VARCHAR(100),
     last_name VARCHAR(100),
-    gender VARCHAR(20) CHECK (gender IN ('male', 'female', 'other')),
+    gender VARCHAR(20) CHECK (gender IN ('male', 'female')),
     email VARCHAR(255),
     date_of_birth DATE,
     city VARCHAR(100),

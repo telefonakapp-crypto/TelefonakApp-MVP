@@ -31,6 +31,9 @@ function formatDate(value?: string | null) {
 }
 
 function actionLabel(action: string) {
+  if (action === 'DECLINE_APPROVED_LISTING') {
+    return 'Decline approved listing';
+  }
   return action.replace(/\./g, ' · ');
 }
 

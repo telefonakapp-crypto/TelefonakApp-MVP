@@ -15,7 +15,7 @@ Do not treat this as application logic documentation. It only describes how to r
 - Node.js and npm installed
 - Xcode installed (with iOS Simulator runtimes)
 - CocoaPods available (`pod` via the Expo / React Native tooling)
-- Backend database configured (see `SETUP.md`)
+- Backend database configured (see the root [README.md](../README.md) backend setup, not a separate `SETUP.md`)
 
 ### Every day (typical loop)
 
@@ -243,6 +243,6 @@ cd mobile && npx expo run:ios --device "iPhone 17 Pro" --no-bundler
 
 ## Related docs
 
-- Initial machine setup: `SETUP.md`
-- Project overview: `README.md`
-- Architecture: `docs/10_ARCHITECTURE.md`
+- Initial machine setup: [README.md](../README.md)
+- Project overview: [README.md](../README.md)
+- Architecture: [10_ARCHITECTURE.md](10_ARCHITECTURE.md)

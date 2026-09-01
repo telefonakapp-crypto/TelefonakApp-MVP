@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getAuthToken } from '../utils/authSession';
 import apiClient from '../utils/api';
 import { logApiError } from '../utils/apiError';
 
@@ -25,7 +26,7 @@ export const NotificationsProvider = ({ children }) => {
   const refreshUnreadCount = useCallback(async () => {
     if (inFlight.current) return;
 
-    const token = await AsyncStorage.getItem('authToken');
+    const token = await getAuthToken();
     if (!token) {
       setUnreadCount(0);
       return;
@@ -43,6 +44,13 @@ export const NotificationsProvider = ({ children }) => {
       const response = await apiClient.get('/notifications/unread-count');
       setUnreadCount(response.data.unread || 0);
     } catch (error) {
+      if (
+        error?.isMaintenance ||
+        error?.name === 'MaintenanceError' ||
+        error?.code === 'ERR_MAINTENANCE'
+      ) {
+        return;
+      }
       logApiError('NotificationsContext.refreshUnreadCount', error);
       setUnreadCount(0);
     } finally {

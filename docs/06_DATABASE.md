@@ -1,468 +1,141 @@
-# Telefonak - Database Specification
+# Telefonak database
 
-**Version:** 1.0
-**Status:** Approved (Living Document)
-**Last Updated:** July 2026
+**Status:** Current implementation.  
+**Code:** `backend/scripts/ensureDatabase.js`, `backend/database/*.sql`, `backend/utils/listingStatus.js`.
 
----
-
-# 1. Purpose
-
-This document defines the database architecture for Telefonak.
-
-Unlike a greenfield design, this document is based on the existing backend implementation and serves as the authoritative reference for future development.
-
-Where the current implementation differs from the approved MVP, those differences are documented together with the planned evolution.
+PostgreSQL. Access via the `pg` package (no ORM). DATE columns are handled as strings in the API to avoid timezone day-shift.
 
 ---
 
-# 2. Database Technology
+## Initialization (`ensureDatabase`)
 
-Database Engine:
+`server.js` calls `await ensureDatabase(pool)` **before** `app.listen()`. `npm run init-db` runs the same function and exits.
 
-- PostgreSQL
+Do **not** apply historical SQL files by hand against a populated database. Do **not** assume every SQL file is safe to re-run.
 
-Database Access:
+The catalog is `MIGRATION_FILES` in `ensureDatabase.js` (**48** files). Tracking table `schema_migrations` (`filename` PK, `applied_at`) is created in JavaScript.
 
-- Node.js
-- pg package (raw SQL)
+`schema_migrations` means: **these filenames are considered applied.** It does **not** mean the database was built by running those exact files.
 
-ORM:
+`verifySchema()` always runs after init or baseline (31 required tables, required `listings` columns, active `sim_configurations`).
 
-- None
+PostgreSQL session advisory lock: `pg_advisory_lock(87261401, 9)` on a dedicated client, unlocked in `finally`. Failed SQL files are **not** recorded.
 
-Migration System:
+### Baseline contract
 
-- SQL schema files
-- Manual initialization through `backend/scripts/init-db.js`
+| Database state at startup | What happens |
+|---|---|
+| **New / empty** (none of the required application tables) | Execute pending SQL in catalog order; record each filename after success. |
+| **Existing, fully initialized, tracking empty or absent** | Create `schema_migrations` if needed, **baseline** current filenames, **do not execute** historical SQL, then `verifySchema()`. |
+| **Existing, partial or inconsistent, tracking empty or absent** | **STOP.** Do not baseline. Do not replay historical SQL. Server does not start. |
+| **Tracking already has rows** | Skip recorded names; execute only pending catalog files. |
 
----
+Fully initialized (when tracking is empty): all 31 required tables, required `listings` columns, `sim_configurations` has at least one active row.
 
-# 3. Current Schema
+**Unsafe:** if `schema_migrations` already has *some* rows (not 0, not the full catalog, or unexpected names), the code takes the **pending-apply** path. Missing historical files such as `admin_schema.sql` and `standardize_listing_status.sql` would execute and can change listing statuses. Do not hand-edit tracking to force a baseline.
 
-Version 1.0 contains the following tables:
+### Future migrations
 
-| Table | Purpose |
-|--------|---------|
-| users | User accounts |
-| otp_codes | Phone verification |
-| brands | Device manufacturers |
-| models | Device models |
-| storage_options | Storage capacities |
-| colors | Device colors |
-| conditions | Device conditions |
-| listings | Marketplace listings |
-| listing_images | Listing gallery |
-| notifications | User notifications |
-| ads | Promotional banners |
+Append a new file under `backend/database/` **and** to the end of `MIGRATION_FILES`. Example: 48 skipped, `49_new_feature.sql` executed and recorded. Treat new SQL as a one-time migration.
+
+### New empty database
+
+Applies all 48 files, records 48 rows, `verifySchema()`, starts. Second start: applied 0, skipped 48.
 
 ---
 
-# 4. Relationships
+## First production adopt of `schema_migrations`
 
-## User
+For an existing Telefonak database that already has schema and data, and does **not** yet have a populated `schema_migrations` table.
 
-One user can own many listings.
+This repository has **no staging database**. Rehearse on a local or staging **copy** (`pg_dump` / restore). Do **not** use live production for rehearsal. Do **not** point `npm run init-db` at production as a special targeting command — it uses the same `DB_*` as the API. Prefer starting the application.
 
-One user can receive many notifications.
+### Why baseline is required
 
----
+Older startup replayed all SQL files every boot. That is unsafe on data that already has `resubmitted` / `updated` listings: `admin_schema.sql` / `standardize_listing_status.sql` can set unsupported statuses to `pending` before later files reintroduce newer statuses.
 
-## Brand
+### Before deployment
 
-One brand owns many models.
+- [ ] PostgreSQL backup (restore tested)
+- [ ] Application version includes `ensureDatabase` baseline (record git SHA)
+- [ ] Same `DB_*` the API will use
+- [ ] No active database incident
+- [ ] Schema looks fully initialized; otherwise **do not deploy**
+- [ ] Tracking absent or 0 rows:
 
----
+```sql
+SELECT to_regclass('public.schema_migrations') AS schema_migrations;
+SELECT COUNT(*) AS migration_rows FROM schema_migrations;
+SELECT filename FROM schema_migrations ORDER BY filename;
+```
 
-## Model
+  - Missing table or `migration_rows = 0` → first-deploy baseline. Continue.
+  - Exactly 48 current catalog filenames → already adopted; normal restart.
+  - Any other count or unexpected names → **STOP.** Do not start. Do not delete rows.
 
-One model belongs to one brand.
+- [ ] Snapshot integrity counts (listings by status, catalog, users, favorites, offers, notifications, banners, audit_logs, listing_moderation_events, listing_images, listing_image_uploads)
+- [ ] Rollback understood: **pre-9A code ignores tracking and replays historical SQL**
 
-One model can be used in many listings.
+### Deployment
 
----
+- [ ] Deploy the code that includes baseline
+- [ ] Start the API
+- [ ] Logs must show baseline, **not** SQL apply:
 
-## Listing
+```text
+Existing initialized database detected — recording current migrations as baseline (no SQL replay)
+✓ Baselined 48 migration files
+Database initialization completed successfully (...; applied 0, skipped 48, baseline)
+```
 
-Each listing belongs to:
+If logs show `Applying admin_schema.sql`, `Empty database detected`, or `applying N pending` on production: **stop the process**.
 
-- User
-- Model
-- Storage
-- Color
-- Condition
+### After deployment
 
-Each listing can contain multiple images.
+- [ ] `schema_migrations` has 48 rows matching `MIGRATION_FILES`
+- [ ] `GET /api/health` succeeds
+- [ ] Integrity counts unchanged (`resubmitted` / `updated` intact)
+- [ ] Restart: `applied 0`, `skipped 48`, no baseline, no `Applying <file>`
 
-Each listing can generate notifications.
+### Partial / inconsistent databases
 
----
+Startup **fails**. Do not automatically replay, baseline, guess, delete tracking, or “repair” production. An empty `schema_migrations` table may exist after a failed start (0 rows is not a baseline). Leave it; investigate.
 
-# 5. Table Overview
+### Backup and rollback
 
-## users
+On a healthy existing DB, first adopt normally only creates `schema_migrations` and inserts 48 names. Backup is still required.
 
-Stores marketplace users.
-
-Primary Key:
-
-- id
-
-Key Fields:
-
-- phone_number
-- email
-- first_name
-- last_name
-- gender
-- city
-- is_verified
-
----
-
-## otp_codes
-
-Stores one-time verification codes.
-
-Purpose:
-
-- Registration
-- Login
-- Password recovery (future)
+**Code rollback to a pre-tracking binary is unsafe** (replay-all SQL). Restore the pre-deploy backup instead of `DROP TABLE schema_migrations`.
 
 ---
 
-## brands
+## Required tables (`verifySchema`)
 
-Stores supported manufacturers.
+`users`, `brands`, `models`, `listings`, `storage_options`, `colors`, `conditions`, `categories`, `storage_capacities`, `model_storages`, `model_colors`, `sim_configurations`, `spec_definitions`, `model_spec_values`, `notifications`, `banners`, `cities`, `areas`, `favorites`, `listing_views`, `offers`, `admins`, `settings`, `audit_logs`, `listing_image_uploads`, `auth_refresh_sessions`, `listing_moderation_events`, `watch_case_sizes`, `model_watch_case_sizes`, `watch_connectivities`, `model_watch_connectivities`.
 
-Examples:
-
-- Apple
-- Samsung
-- Google
-- Huawei
+Other tables exist in SQL (for example `otp_codes`, `listing_images`, `listing_moderation_events` is required, `ads`) but are not all in the 31-name check.
 
 ---
 
-## models
+## Listing statuses
 
-Stores phone models.
+Canonical: `backend/utils/listingStatus.js`.
 
-Each model belongs to a brand.
+| Status | Role |
+|---|---|
+| `pending` | New listing awaiting review (unless auto-approve) |
+| `resubmitted` | New snapshot after editing a declined tip |
+| `updated` | Approved listing edited by seller; awaiting review |
+| `approved` | Live on the marketplace (only public status) |
+| `declined` | Terminal for that snapshot; edit creates a new resubmitted row |
+| `hidden` | Owner hid an approved listing; unhide returns to approved |
+| `sold` | Terminal |
+| `deleted` | Terminal (soft) |
 
-Examples:
-
-- iPhone 16 Pro
-- Galaxy S25 Ultra
-
----
-
-## storage_options
-
-Reference table.
-
-Examples:
-
-- 64 GB
-- 128 GB
-- 256 GB
-- 512 GB
-- 1 TB
+Public marketplace, search, favorites, view counting, and public detail use **`approved` only**.
 
 ---
 
-## colors
+## Catalog
 
-Reference table.
-
-Examples:
-
-- Black
-- White
-- Blue
-- Titanium
-
----
-
-## conditions
-
-Reference table.
-
-Current values:
-
-- New
-- Used - Like New
-- Used - Good
-- Used - Fair
-
----
-
-## listings
-
-Core marketplace table.
-
-Stores:
-
-- Seller
-- Device
-- Price
-- Battery Percentage
-- Description
-- Location
-- Status
-
----
-
-## listing_images
-
-Stores listing photos.
-
-Each image belongs to exactly one listing.
-
----
-
-## notifications
-
-Stores user notifications.
-
-Examples:
-
-- Listing Approved
-- Listing Declined
-- New Listing
-
----
-
-## ads
-
-Stores promotional banners displayed in the application.
-
----
-
-# 6. Current Constraints
-
-The existing implementation includes:
-
-- Primary Keys
-- Foreign Keys
-- Unique Constraints
-- Check Constraints
-- Indexes
-
-Important validation:
-
-- Price > 0
-- Battery Percentage between 70–100
-- Gender validation
-- Listing status validation
-
----
-
-# 7. Current Indexes
-
-Major indexes include:
-
-- User phone number
-- Listing status
-- Listing creation date
-- Listing owner
-- Model
-- Notifications
-- Ads
-
-These indexes support marketplace performance.
-
----
-
-# 8. Current Limitations
-
-The current schema does not yet support:
-
-- Saved Listings
-- Offers
-- Listing Expiration
-- Audit Logs
-- User Suspension
-- Device Types
-- Separate City and Area
-- Hidden Listings
-- Expired Listings
-- View Counts
-
-These features are planned for future schema updates.
-
----
-
-# 9. Differences Between Current Schema and MVP
-
-The approved MVP requires several additions.
-
-## Authentication
-
-Current:
-
-- Phone OTP
-
-Planned:
-
-- Email uniqueness
-- Password authentication
-
----
-
-## Listings
-
-Current:
-
-- location
-
-Planned:
-
-- city
-- area
-
----
-
-Current:
-
-Battery validation:
-
-70–100
-
-Planned:
-
-0–100
-
----
-
-Current statuses:
-
-- pending
-- approved
-- declined
-- active
-- sold
-- deleted
-
-Planned statuses:
-
-- pending
-- approved
-- rejected
-- hidden
-- sold
-- expired
-
----
-
-## Missing Tables
-
-Future versions should introduce:
-
-### saved_listings
-
-Stores user favourites.
-
----
-
-### offers
-
-Stores buyer offers.
-
----
-
-### audit_logs
-
-Stores administrator actions.
-
----
-
-### listing_views
-
-Tracks listing popularity.
-
----
-
-# 10. Known Issues
-
-The following implementation issues should be addressed before production launch.
-
-## Listing Status
-
-The backend currently mixes:
-
-- active
-- approved
-
-This should be standardized to a single published status.
-
----
-
-## Email
-
-Email is not currently unique.
-
-A UNIQUE constraint should be added.
-
----
-
-## Password Authentication
-
-The current implementation uses OTP only.
-
-Password authentication should be added if retained in the product requirements.
-
----
-
-## Admin Notes
-
-Admin approval notes are accepted by the API but not stored.
-
----
-
-## Rejection Reasons
-
-Listing rejection reasons are not persisted.
-
-A dedicated field should be added.
-
----
-
-## Bilingual Support
-
-The optional bilingual migration is not enabled by default.
-
-If multilingual support is introduced in the future, the migration should become part of the standard initialization process.
-
----
-
-# 11. Future Database Evolution
-
-Future schema additions are expected to include:
-
-- saved_listings
-- offers
-- audit_logs
-- listing_views
-- listing_reports
-- user_sessions
-- listing_expiration
-- user_preferences
-
-These additions should be implemented using versioned database migrations rather than modifying historical SQL files.
-
----
-
-# 12. Database Design Principles
-
-All future schema changes should follow these principles:
-
-- Normalize shared reference data.
-- Preserve referential integrity.
-- Use foreign keys wherever possible.
-- Prefer explicit constraints over application-only validation.
-- Maintain backward compatibility through migrations.
-- Keep indexes aligned with application query patterns.
-
-This document is the authoritative reference for the Telefonak database and should be updated whenever the schema changes.
+MVP-visible categories: `phones`, `smartwatches` (`backend/config/mvpCategories.js` and `mobile/src/utils/mvpCategories.js` must stay in sync). Listings may be `listing_source` `catalog` or `custom` (Other brand).

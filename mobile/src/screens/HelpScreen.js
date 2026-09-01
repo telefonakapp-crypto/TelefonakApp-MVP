@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -9,24 +9,59 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
+import { openPhoneDialer } from '../utils/phoneDialer';
+import { showToast } from '../utils/toast';
+import {
+  getCachedContactSettings,
+  refreshContactSettings,
+} from '../utils/contactSettings';
 
 export default function HelpScreen() {
   const navigation = useNavigation();
   const { colors } = useTheme();
   const { t, isRTL } = useLanguage();
+  const [contact, setContact] = useState(getCachedContactSettings);
 
-  const handleContactSupport = () => {
-    // You can replace this with actual support email or phone
-    Linking.openURL('mailto:support@telefonak.com?subject=Help Request');
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      refreshContactSettings().then((next) => {
+        if (active) setContact(next);
+      });
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
+  const handleContactSupport = async () => {
+    const email = contact.contact_email;
+    if (!email) {
+      showToast(t('contactUs.emailUnavailable'));
+      return;
+    }
+    const url = `mailto:${email}?subject=${encodeURIComponent('Help Request')}`;
+    try {
+      const canOpen = await Linking.canOpenURL(url);
+      if (!canOpen) {
+        showToast(t('contactUs.emailUnavailable'));
+        return;
+      }
+      await Linking.openURL(url);
+    } catch {
+      showToast(t('contactUs.emailUnavailable'));
+    }
   };
 
   const handleCallSupport = () => {
-    // You can replace this with actual support phone number
-    Linking.openURL('tel:+962790000000');
+    openPhoneDialer(contact.contact_phone, {
+      unavailableMessage: t('contactUs.phoneUnavailable'),
+      dialerUnavailableMessage: t('common.phoneDialerUnavailable'),
+    });
   };
 
   return (
@@ -87,13 +122,23 @@ export default function HelpScreen() {
 
           <TouchableOpacity style={[styles.contactButton, { backgroundColor: colors.inputBackground }, getFlexDirection(isRTL, 'row')]} onPress={handleContactSupport}>
             <Ionicons name="mail-outline" size={24} color={colors.primary} style={{ marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }} />
-            <Text style={[styles.contactButtonText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('help.emailSupport')}</Text>
+            <View style={styles.contactButtonTextWrap}>
+              <Text style={[styles.contactButtonText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('help.emailSupport')}</Text>
+              <Text style={[styles.contactButtonValue, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]} numberOfLines={1}>
+                {contact.contact_email}
+              </Text>
+            </View>
             <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
           </TouchableOpacity>
 
           <TouchableOpacity style={[styles.contactButton, { backgroundColor: colors.inputBackground }, getFlexDirection(isRTL, 'row')]} onPress={handleCallSupport}>
             <Ionicons name="call-outline" size={24} color={colors.primary} style={{ marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }} />
-            <Text style={[styles.contactButtonText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('help.callSupport')}</Text>
+            <View style={styles.contactButtonTextWrap}>
+              <Text style={[styles.contactButtonText, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('help.callSupport')}</Text>
+              <Text style={[styles.contactButtonValue, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]} numberOfLines={1}>
+                {contact.contact_phone}
+              </Text>
+            </View>
             <Ionicons name={isRTL ? "chevron-back" : "chevron-forward"} size={20} color={colors.textSecondary} />
           </TouchableOpacity>
         </View>
@@ -166,10 +211,16 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 12,
   },
-  contactButtonText: {
+  contactButtonTextWrap: {
     flex: 1,
+  },
+  contactButtonText: {
     fontSize: 16,
     fontWeight: '500',
+  },
+  contactButtonValue: {
+    fontSize: 13,
+    marginTop: 2,
   },
   bulletPoint: {
     fontSize: 16,

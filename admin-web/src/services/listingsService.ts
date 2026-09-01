@@ -45,3 +45,7 @@ export async function approveListing(id: number): Promise<void> {
 export async function declineListing(id: number, reason: string): Promise<void> {
   await apiClient.post(`/admin/listings/${id}/decline`, { reason });
 }
+
+export async function deleteListing(id: number): Promise<void> {
+  await apiClient.post(`/admin/listings/${id}/delete`);
+}

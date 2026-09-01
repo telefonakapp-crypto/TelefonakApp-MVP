@@ -1,3 +1,5 @@
+> **Historical (July 2026 product planning).** Not an implementation contract. Current tests: [README.md](../README.md) and [backend/security-tests/README.md](../backend/security-tests/README.md).
+
 # Telefonak - Testing Strategy
 
 **Version:** 1.0  

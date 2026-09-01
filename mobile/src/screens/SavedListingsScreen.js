@@ -18,6 +18,10 @@ import { useLanguage } from '../context/LanguageContext';
 import { useFavorites } from '../context/FavoritesContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import FavoriteButton from '../components/FavoriteButton';
+import { ignoreIfMaintenance } from '../utils/maintenance';
+import { MarketplaceCardSkeleton } from '../components/ui';
+import { getListingDisplayName } from '../utils/listingDisplayName';
+import { localizeConditionName } from '../utils/listingCondition';
 
 const PAGE_SIZE = 20;
 
@@ -45,6 +49,7 @@ export default function SavedListingsScreen() {
       setListings(rows);
       setHasMore(rows.length === PAGE_SIZE);
     } catch (error) {
+      if (ignoreIfMaintenance(error)) return;
       console.error('Error fetching saved listings:', error);
     } finally {
       setLoading(false);
@@ -64,6 +69,7 @@ export default function SavedListingsScreen() {
       });
       setHasMore(rows.length === PAGE_SIZE);
     } catch (error) {
+      if (ignoreIfMaintenance(error)) return;
       console.error('Error loading more saved listings:', error);
     } finally {
       setLoadingMore(false);
@@ -90,25 +96,6 @@ export default function SavedListingsScreen() {
     }
   };
 
-  const conditionLabel = (conditionName) => {
-    const key = conditionName?.toLowerCase().replace(/\s+/g, '').replace(/-/g, '');
-    const map = {
-      'new': t('conditions.new'),
-      'likenew': t('conditions.likeNew'),
-      'usedlikenew': t('conditions.usedlikenew'),
-      'usedgood': t('conditions.usedgood'),
-      'usedfair': t('conditions.usedfair'),
-      'excellent': t('conditions.excellent'),
-      'verygood': t('conditions.veryGood'),
-      'good': t('conditions.good'),
-      'fair': t('conditions.fair'),
-      'poor': t('conditions.poor'),
-      'used': t('conditions.used'),
-      'refurbished': t('conditions.refurbished'),
-    };
-    return map[key] || conditionName || '';
-  };
-
   const renderItem = ({ item }) => (
     <TouchableOpacity
       style={[styles.card, { backgroundColor: colors.surface }]}
@@ -131,13 +118,13 @@ export default function SavedListingsScreen() {
           ]}
         >
           <Text style={[styles.conditionText, { color: isDarkMode ? '#09090b' : '#ffffff' }]}>
-            {conditionLabel(item.condition_name)}
+            {localizeConditionName(item.condition_name, t)}
           </Text>
         </View>
       </View>
       <View style={styles.cardContent}>
         <Text style={[styles.cardTitle, { color: colors.text }]} numberOfLines={1}>
-          {item.brand_name} {item.model_name}
+          {getListingDisplayName(item.brand_name, item.model_name)}
         </Text>
         <Text style={[styles.cardPrice, { color: colors.primary }]}>{item.price} JOD</Text>
       </View>
@@ -145,7 +132,10 @@ export default function SavedListingsScreen() {
   );
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
+    <SafeAreaView
+      style={[styles.container, { backgroundColor: colors.background }]}
+      edges={['top', 'bottom']}
+    >
       <View
         style={[
           styles.header,
@@ -153,7 +143,12 @@ export default function SavedListingsScreen() {
           getFlexDirection(isRTL, 'row'),
         ]}
       >
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.headerLeft}>
+        <TouchableOpacity
+          onPress={() => navigation.goBack()}
+          style={styles.headerLeft}
+          accessibilityRole="button"
+          accessibilityLabel={t('common.back')}
+        >
           <Ionicons name={isRTL ? 'arrow-forward' : 'arrow-back'} size={24} color={colors.text} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
@@ -162,8 +157,10 @@ export default function SavedListingsScreen() {
       </View>
 
       {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
+        <View style={styles.skeletonGrid}>
+          {Array.from({ length: 4 }).map((_, index) => (
+            <MarketplaceCardSkeleton key={index} imageHeight={128} />
+          ))}
         </View>
       ) : (
         <FlatList
@@ -171,7 +168,10 @@ export default function SavedListingsScreen() {
           keyExtractor={(item) => String(item.id)}
           renderItem={renderItem}
           numColumns={2}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[
+            styles.listContent,
+            listings.length === 0 && styles.emptyListContent,
+          ]}
           columnWrapperStyle={styles.columnWrapper}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
@@ -222,14 +222,19 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+  skeletonGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 20,
+    padding: 16,
   },
   listContent: {
     padding: 16,
     flexGrow: 1,
+  },
+  emptyListContent: {
+    justifyContent: 'center',
   },
   columnWrapper: {
     justifyContent: 'flex-start',
@@ -240,7 +245,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
     borderRadius: 16,
     overflow: 'hidden',
-    shadowColor: '#000',
+    shadowColor: 'rgba(26, 28, 28, 0.04)',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 2,
@@ -280,11 +285,9 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   emptyContainer: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 32,
-    paddingTop: 80,
   },
   emptyTitle: {
     fontSize: 18,

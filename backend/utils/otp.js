@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { body } = require('express-validator');
-const { isProduction } = require('../config/env');
+const { isProduction, getOtpPepper } = require('../config/env');
+const { getOtpConfig, isOtpDevMode } = require('../config/otp');
 
 /**
  * Shared OTP service, used by every flow that needs a one-time code (login,
@@ -11,30 +12,26 @@ const { isProduction } = require('../config/env');
  * Codes are scoped by purpose, so a code issued for one flow can never be
  * redeemed in another. Rate limits are deliberately NOT scoped by purpose: they
  * are per phone number, so no flow can be used to top up another flow's budget.
+ *
+ * Numeric limits come from config/otp.js (production vs Development Testing Mode).
+ * At rest, only an HMAC of the code is stored (SEC-014) — never plaintext.
  */
-
-const OTP_LENGTH = 4;
-const OTP_TTL_MINUTES = 10;
-
-// Rate limits, all per phone number.
-const OTP_RESEND_COOLDOWN_SECONDS = 60;
-const OTP_REQUEST_WINDOW_MINUTES = 60;
-const OTP_MAX_REQUESTS_PER_WINDOW = 5;
-// Incorrect guesses allowed against a single code before it is burned.
-const OTP_MAX_VERIFY_ATTEMPTS = 5;
 
 const OTP_PURPOSE = {
   AUTH: 'auth',
   PHONE_CHANGE: 'phone_change',
 };
 
-// Why a request or verification was refused. Routes map these to responses
-// through sendOtpError below rather than interpreting them individually.
 const OTP_ERROR = {
   COOLDOWN: 'cooldown',
   REQUEST_LIMIT: 'request_limit',
   INVALID: 'invalid',
   ATTEMPTS_EXCEEDED: 'attempts_exceeded',
+};
+
+const OTP_LIMIT = {
+  RESEND_COOLDOWN: 'resend_cooldown',
+  REQUEST_WINDOW: 'request_window',
 };
 
 // Development returns a fixed code so mobile QA stays simple without SMS.
@@ -47,15 +44,43 @@ function generateOtpCode() {
   return TEST_MODE_CODE;
 }
 
-/** Dev/test clients may echo OTP in JSON; production must never. */
+/** HMAC-SHA256 hex digest of phone|purpose|code — stored instead of plaintext. */
+function hashOtpCode(phoneNumber, purpose, code) {
+  return crypto
+    .createHmac('sha256', getOtpPepper())
+    .update(`${String(phoneNumber)}|${String(purpose)}|${String(code)}`)
+    .digest('hex');
+}
+
+/**
+ * Dev convenience only. Production must never return OTP in JSON (SEC-008).
+ * Staging with NODE_ENV=production is also blocked.
+ */
 function shouldExposeOtpInResponse() {
-  return !isProduction();
+  if (isProduction()) return false;
+  return process.env.NODE_ENV === 'development' || process.env.OTP_DEV_MODE === 'true';
+}
+
+function formatPhoneForDevLog(phoneNumber) {
+  const raw = String(phoneNumber || '');
+  if (raw.startsWith('+')) return raw;
+  if (/^0\d+$/.test(raw)) return `+962${raw.slice(1)}`;
+  return raw;
+}
+
+/** Console-only helper — never used in production (isOtpDevMode is false there). */
+function logDevOtp(phoneNumber, code) {
+  if (isProduction()) return;
+  console.log(
+    `[DEV OTP]\nPhone: ${formatPhoneForDevLog(phoneNumber)}\nOTP: ${code}`
+  );
 }
 
 async function sendOtp(phoneNumber, code) {
   const sid = process.env.TWILIO_ACCOUNT_SID;
   const token = process.env.TWILIO_AUTH_TOKEN;
   const from = process.env.TWILIO_PHONE_NUMBER;
+  let sentViaTwilio = false;
 
   if (sid && token && from && !sid.startsWith('your_')) {
     try {
@@ -66,19 +91,28 @@ async function sendOtp(phoneNumber, code) {
         from,
         to: phoneNumber,
       });
-      return true;
+      sentViaTwilio = true;
     } catch (error) {
       console.error('[otp] Twilio send failed:', error.message || error);
       throw error;
     }
   }
 
-  console.log(`[TEST MODE] OTP for ${phoneNumber}: ${code}`);
-  if (isProduction()) {
-    console.warn(
-      '[otp] Production OTP issued without Twilio credentials — configure TWILIO_* before launch'
-    );
+  if (isOtpDevMode()) {
+    // Always print in Development Testing Mode (with or without Twilio).
+    logDevOtp(phoneNumber, code);
+  } else if (!sentViaTwilio) {
+    if (isProduction()) {
+      console.warn(
+        '[otp] Production OTP issued without Twilio credentials — configure TWILIO_* before launch'
+      );
+    } else {
+      // Non-production fallback without Twilio — still avoid logging the code
+      // unless Development Testing Mode is on (handled above).
+      console.log(`[TEST MODE] OTP issued for ${formatPhoneForDevLog(phoneNumber)} (code not logged)`);
+    }
   }
+
   return true;
 }
 
@@ -96,6 +130,13 @@ const secondsUntil = (date) => Math.max(1, Math.ceil((new Date(date).getTime() -
  *                  | {ok: false, reason: string, retryAfterSeconds: number}>}
  */
 async function issueOtp(pool, { phoneNumber, purpose = OTP_PURPOSE.AUTH }) {
+  const {
+    resendCooldownSeconds,
+    otpTtlMinutes,
+    phoneWindowMinutes,
+    phoneMaxRequestsPerWindow,
+  } = getOtpConfig();
+
   const client = await pool.connect();
 
   try {
@@ -117,11 +158,12 @@ async function issueOtp(pool, { phoneNumber, purpose = OTP_PURPOSE.AUTH }) {
               MAX(created_at) AS latest_request
        FROM otp_codes
        WHERE phone_number = $1 AND created_at > NOW() - ($2 || ' minutes')::interval`,
-      [phoneNumber, OTP_REQUEST_WINDOW_MINUTES]
+      [phoneNumber, phoneWindowMinutes]
     )).rows[0];
 
     if (windowState.latest_request) {
-      const nextAllowedAt = new Date(windowState.latest_request).getTime() + OTP_RESEND_COOLDOWN_SECONDS * 1000;
+      const nextAllowedAt =
+        new Date(windowState.latest_request).getTime() + resendCooldownSeconds * 1000;
       if (nextAllowedAt > Date.now()) {
         await client.query('ROLLBACK');
         return {
@@ -132,9 +174,10 @@ async function issueOtp(pool, { phoneNumber, purpose = OTP_PURPOSE.AUTH }) {
       }
     }
 
-    if (windowState.requests >= OTP_MAX_REQUESTS_PER_WINDOW) {
+    if (windowState.requests >= phoneMaxRequestsPerWindow) {
       // The budget frees up when the oldest request leaves the window.
-      const windowFreesAt = new Date(windowState.oldest_request).getTime() + OTP_REQUEST_WINDOW_MINUTES * 60 * 1000;
+      const windowFreesAt =
+        new Date(windowState.oldest_request).getTime() + phoneWindowMinutes * 60 * 1000;
       await client.query('ROLLBACK');
       return {
         ok: false,
@@ -144,7 +187,8 @@ async function issueOtp(pool, { phoneNumber, purpose = OTP_PURPOSE.AUTH }) {
     }
 
     const code = generateOtpCode();
-    const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+    const codeHash = hashOtpCode(phoneNumber, purpose, code);
+    const expiresAt = new Date(Date.now() + otpTtlMinutes * 60 * 1000);
 
     // Retiring the previous code for this purpose keeps exactly one redeemable
     // code per flow, as before. It is marked spent rather than deleted so the
@@ -156,7 +200,7 @@ async function issueOtp(pool, { phoneNumber, purpose = OTP_PURPOSE.AUTH }) {
        )
        INSERT INTO otp_codes (phone_number, code, expires_at, purpose)
        VALUES ($1, $2, $3, $4)`,
-      [phoneNumber, code, expiresAt, purpose]
+      [phoneNumber, codeHash, expiresAt, purpose]
     );
 
     await client.query('COMMIT');
@@ -168,7 +212,7 @@ async function issueOtp(pool, { phoneNumber, purpose = OTP_PURPOSE.AUTH }) {
       ok: true,
       code,
       expiresAt,
-      requestsRemaining: OTP_MAX_REQUESTS_PER_WINDOW - (windowState.requests + 1),
+      requestsRemaining: phoneMaxRequestsPerWindow - (windowState.requests + 1),
     };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => {});
@@ -189,6 +233,9 @@ async function issueOtp(pool, { phoneNumber, purpose = OTP_PURPOSE.AUTH }) {
  * @returns {Promise<{ok: true} | {ok: false, reason: string, attemptsRemaining?: number}>}
  */
 async function consumeOtp(pool, { phoneNumber, code, purpose = OTP_PURPOSE.AUTH }) {
+  const { maxVerifyAttempts } = getOtpConfig();
+  const codeHash = hashOtpCode(phoneNumber, purpose, code);
+
   // Selecting the row FOR UPDATE inside the UPDATE makes redemption atomic.
   const activeCode = `
     SELECT id FROM otp_codes
@@ -203,7 +250,7 @@ async function consumeOtp(pool, { phoneNumber, code, purpose = OTP_PURPOSE.AUTH 
      SET is_used = TRUE, attempts = 0
      WHERE id = (${activeCode}) AND code = $3
      RETURNING id`,
-    [phoneNumber, purpose, code]
+    [phoneNumber, purpose, codeHash]
   );
 
   if (redeemed.rows.length > 0) {
@@ -218,7 +265,7 @@ async function consumeOtp(pool, { phoneNumber, code, purpose = OTP_PURPOSE.AUTH 
          is_used = (attempts + 1 >= $3)
      WHERE id = (${activeCode})
      RETURNING attempts, is_used`,
-    [phoneNumber, purpose, OTP_MAX_VERIFY_ATTEMPTS]
+    [phoneNumber, purpose, maxVerifyAttempts]
   );
 
   if (attempted.rows.length === 0) {
@@ -230,7 +277,19 @@ async function consumeOtp(pool, { phoneNumber, code, purpose = OTP_PURPOSE.AUTH 
 
   return burned
     ? { ok: false, reason: OTP_ERROR.ATTEMPTS_EXCEEDED }
-    : { ok: false, reason: OTP_ERROR.INVALID, attemptsRemaining: OTP_MAX_VERIFY_ATTEMPTS - attempts };
+    : { ok: false, reason: OTP_ERROR.INVALID, attemptsRemaining: maxVerifyAttempts - attempts };
+}
+
+/**
+ * Fields every successful OTP-issue response should include so clients can
+ * start the resend countdown from the server constant (not a guessed value).
+ */
+function otpIssueSuccessFields() {
+  const { resendCooldownSeconds, otpTtlMinutes } = getOtpConfig();
+  return {
+    resend_cooldown_seconds: resendCooldownSeconds,
+    otp_ttl_seconds: otpTtlMinutes * 60,
+  };
 }
 
 /**
@@ -247,12 +306,16 @@ function sendOtpError(res, result) {
       return res.status(429).json({
         error: `Please wait ${result.retryAfterSeconds} seconds before requesting another code`,
         retry_after_seconds: result.retryAfterSeconds,
+        // Short gap between sends — drives the Resend button countdown.
+        limit: OTP_LIMIT.RESEND_COOLDOWN,
       });
 
     case OTP_ERROR.REQUEST_LIMIT:
       return res.status(429).json({
         error: `Too many verification codes requested. Please try again in ${Math.ceil(result.retryAfterSeconds / 60)} minutes.`,
         retry_after_seconds: result.retryAfterSeconds,
+        // Hourly budget exhausted — must NOT drive the Resend countdown.
+        limit: OTP_LIMIT.REQUEST_WINDOW,
       });
 
     case OTP_ERROR.ATTEMPTS_EXCEEDED:
@@ -269,25 +332,45 @@ function sendOtpError(res, result) {
   }
 }
 
-const otpValidator = (field = 'otp') =>
-  body(field)
-    .isLength({ min: OTP_LENGTH, max: OTP_LENGTH })
-    .withMessage(`OTP must be ${OTP_LENGTH} digits`);
+const otpValidator = (field = 'otp') => {
+  const { otpLength } = getOtpConfig();
+  return body(field)
+    .isLength({ min: otpLength, max: otpLength })
+    .withMessage(`OTP must be ${otpLength} digits`);
+};
 
+// Named exports keep existing import sites working; values resolve from config.
 module.exports = {
-  OTP_LENGTH,
-  OTP_TTL_MINUTES,
-  OTP_RESEND_COOLDOWN_SECONDS,
-  OTP_REQUEST_WINDOW_MINUTES,
-  OTP_MAX_REQUESTS_PER_WINDOW,
-  OTP_MAX_VERIFY_ATTEMPTS,
+  get OTP_LENGTH() {
+    return getOtpConfig().otpLength;
+  },
+  get OTP_TTL_MINUTES() {
+    return getOtpConfig().otpTtlMinutes;
+  },
+  get OTP_RESEND_COOLDOWN_SECONDS() {
+    return getOtpConfig().resendCooldownSeconds;
+  },
+  get OTP_REQUEST_WINDOW_MINUTES() {
+    return getOtpConfig().phoneWindowMinutes;
+  },
+  get OTP_MAX_REQUESTS_PER_WINDOW() {
+    return getOtpConfig().phoneMaxRequestsPerWindow;
+  },
+  get OTP_MAX_VERIFY_ATTEMPTS() {
+    return getOtpConfig().maxVerifyAttempts;
+  },
   OTP_PURPOSE,
   OTP_ERROR,
+  OTP_LIMIT,
   generateOtpCode,
+  hashOtpCode,
   sendOtp,
   shouldExposeOtpInResponse,
+  otpIssueSuccessFields,
   issueOtp,
   consumeOtp,
   sendOtpError,
   otpValidator,
+  isOtpDevMode,
+  getOtpConfig,
 };
