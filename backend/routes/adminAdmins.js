@@ -2,11 +2,12 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const pool = require('../config/database');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
-const requireSuperAdmin = require('../middleware/requireSuperAdmin');
+const requirePermission = require('../middleware/requirePermission');
 const {
   ADMIN_ROLES,
   ADMIN_ROLE_VALUES,
   DEFAULT_ADMIN_ROLE,
+  PERMISSIONS,
   toPublicAdmin,
 } = require('../utils/adminAuth');
 const { writeAuditLog } = require('../utils/auditLog');
@@ -16,7 +17,7 @@ const router = express.Router();
 const BCRYPT_ROUNDS = 12;
 const MIN_PASSWORD_LENGTH = 8;
 
-router.use(verifyAdminAuth, requireSuperAdmin);
+router.use(verifyAdminAuth, requirePermission(PERMISSIONS.ADMINS_MANAGE));
 
 function normalizeEmail(email) {
   return String(email || '')

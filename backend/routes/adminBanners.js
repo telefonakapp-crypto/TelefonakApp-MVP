@@ -1,6 +1,8 @@
 const express = require('express');
 const pool = require('../config/database');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
+const requirePermission = require('../middleware/requirePermission');
+const { PERMISSIONS } = require('../utils/adminAuth');
 const {
   ALLOWED_ACTION_TYPES,
   mapBannerRow,
@@ -170,7 +172,7 @@ router.get('/', verifyAdminAuth, async (req, res) => {
 /**
  * POST /api/admin/banners
  */
-router.post('/', verifyAdminAuth, async (req, res) => {
+router.post('/', verifyAdminAuth, requirePermission(PERMISSIONS.BANNERS_WRITE), async (req, res) => {
   try {
     const {
       title,
@@ -238,7 +240,7 @@ router.post('/', verifyAdminAuth, async (req, res) => {
 /**
  * PUT /api/admin/banners/:id
  */
-router.put('/:id', verifyAdminAuth, async (req, res) => {
+router.put('/:id', verifyAdminAuth, requirePermission(PERMISSIONS.BANNERS_WRITE), async (req, res) => {
   try {
     const { id } = req.params;
     const existing = await pool.query('SELECT * FROM banners WHERE id = $1', [id]);
@@ -349,7 +351,11 @@ router.put('/:id', verifyAdminAuth, async (req, res) => {
 /**
  * DELETE /api/admin/banners/:id
  */
-router.delete('/:id', verifyAdminAuth, async (req, res) => {
+router.delete(
+  '/:id',
+  verifyAdminAuth,
+  requirePermission(PERMISSIONS.BANNERS_WRITE),
+  async (req, res) => {
   try {
     const { id } = req.params;
     const result = await pool.query(

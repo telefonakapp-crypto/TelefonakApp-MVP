@@ -55,6 +55,7 @@ const MIGRATION_FILES = [
   { file: 'auth_refresh_sessions.sql',        label: 'Customer refresh sessions (SEC-006/012)' },
   { file: 'custom_listings.sql',              label: 'Custom (Other) listing columns + source check' },
   { file: 'phone_catalog_seed.sql',           label: 'Researched phone catalog (brands/models/storage)' },
+  { file: 'user_push_notifications.sql',      label: 'User push preference + Expo device tokens' },
 ];
 
 const REQUIRED_TABLES = [
@@ -89,6 +90,7 @@ const REQUIRED_TABLES = [
   'model_watch_case_sizes',
   'watch_connectivities',
   'model_watch_connectivities',
+  'user_push_tokens',
 ];
 
 const REQUIRED_LISTING_COLUMNS = [

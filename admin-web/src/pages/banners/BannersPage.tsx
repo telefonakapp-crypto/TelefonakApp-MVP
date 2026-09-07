@@ -14,6 +14,8 @@ import {
 import { BannerForm } from '../../components/banners/BannerForm';
 import { ConfirmModal } from '../../components/listings/ConfirmModal';
 import type { Banner, BannerPayload } from '../../types/banner';
+import { useAuth } from '../../hooks/useAuth';
+import { PERMISSIONS } from '../../auth/permissions';
 
 type FiltersState = {
   search: string;
@@ -27,6 +29,8 @@ const DEFAULT_FILTERS: FiltersState = {
 
 export function BannersPage() {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
+  const canWriteBanners = hasPermission(PERMISSIONS.BANNERS_WRITE);
   const [filters, setFilters] = useState<FiltersState>(DEFAULT_FILTERS);
   const [formOpen, setFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<'create' | 'edit'>('create');
@@ -122,13 +126,15 @@ export function BannersPage() {
             Manage home screen marketing banners
           </p>
         </div>
-        <button
-          type="button"
-          onClick={openCreate}
-          className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
-        >
-          Create banner
-        </button>
+        {canWriteBanners ? (
+          <button
+            type="button"
+            onClick={openCreate}
+            className="rounded-lg bg-slate-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800"
+          >
+            Create banner
+          </button>
+        ) : null}
       </div>
 
       <BannersFilters
@@ -162,6 +168,7 @@ export function BannersPage() {
       {!bannersQuery.isLoading && !bannersQuery.isError ? (
         <BannersTable
           banners={bannersQuery.data ?? []}
+          canWrite={canWriteBanners}
           onEdit={openEdit}
           onDelete={(banner) => {
             setDeleteError(null);

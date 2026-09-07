@@ -28,5 +28,6 @@ export { BottomSheet } from './BottomSheet';
 export { SearchablePickerSheet } from './SearchablePickerSheet';
 export { SelectionList, SelectionListItem } from './SelectionList';
 export { IconButton } from './IconButton';
+export { OwnerActionRow, ownerActionListStyle } from './OwnerActionRow';
 export { Screen } from './Screen';
 export { Stack } from './Stack';

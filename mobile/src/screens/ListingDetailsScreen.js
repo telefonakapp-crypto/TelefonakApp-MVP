@@ -40,6 +40,8 @@ import {
   DetailScreenSkeleton,
   IconButton,
   EmptyState,
+  OwnerActionRow,
+  ownerActionListStyle,
 } from '../components/ui';
 import { isSmartwatchListing } from '../utils/listingCatalogForm';
 import { formatListingLocation } from '../utils/marketplaceFilters';
@@ -1062,62 +1064,62 @@ export default function ListingDetailsScreen() {
                 {t('listingDetails.manageListing')}
               </Text>
 
-              {canEdit || canResubmit ? (
-                <Button
-                  label={t('myListings.edit')}
-                  onPress={() => navigation.navigate('CreateListing', { listingId })}
-                  disabled={ownerActionBusy}
-                  style={styles.ownerBtn}
-                />
-              ) : null}
+              <View style={ownerActionListStyle}>
+                {canEdit || canResubmit ? (
+                  <OwnerActionRow
+                    icon="pencil"
+                    label={t('myListings.edit')}
+                    onPress={() => navigation.navigate('CreateListing', { listingId })}
+                    disabled={ownerActionBusy}
+                    variant="primary"
+                  />
+                ) : null}
 
-              {canHide ? (
-                <Button
-                  label={t('myListings.hideListing')}
-                  variant="secondary"
-                  onPress={handleHideListing}
-                  disabled={ownerActionBusy}
-                  style={styles.ownerBtn}
-                />
-              ) : null}
+                {canHide ? (
+                  <OwnerActionRow
+                    icon="eye-off-outline"
+                    label={t('myListings.hideListing')}
+                    onPress={handleHideListing}
+                    disabled={ownerActionBusy}
+                  />
+                ) : null}
 
-              {canUnhide ? (
-                <Button
-                  label={t('myListings.unhideListing')}
-                  onPress={handleUnhideListing}
-                  loading={ownerActionBusy}
-                  disabled={ownerActionBusy}
-                  style={styles.ownerBtn}
-                />
-              ) : null}
+                {canUnhide ? (
+                  <OwnerActionRow
+                    icon="eye-outline"
+                    label={t('myListings.unhideListing')}
+                    onPress={handleUnhideListing}
+                    loading={ownerActionBusy}
+                    disabled={ownerActionBusy}
+                  />
+                ) : null}
 
-              {canMarkSold ? (
-                <Button
-                  label={t('myListings.markAsSold')}
-                  variant="secondary"
-                  onPress={handleMarkAsSold}
-                  disabled={ownerActionBusy}
-                  style={styles.ownerBtn}
-                />
-              ) : null}
+                {canMarkSold ? (
+                  <OwnerActionRow
+                    icon="pricetag-outline"
+                    label={t('myListings.markAsSold')}
+                    onPress={handleMarkAsSold}
+                    disabled={ownerActionBusy}
+                  />
+                ) : null}
 
-              <Button
-                label={t('listingDetails.shareListing')}
-                variant="secondary"
-                onPress={handleShareListing}
-                disabled={ownerActionBusy}
-                style={styles.ownerBtn}
-              />
-
-              {canDelete ? (
-                <Button
-                  label={t('myListings.deleteListing')}
-                  variant="danger"
-                  onPress={handleDeleteListing}
+                <OwnerActionRow
+                  icon="share-social-outline"
+                  label={t('listingDetails.shareListing')}
+                  onPress={handleShareListing}
                   disabled={ownerActionBusy}
-                  style={styles.ownerBtn}
                 />
-              ) : null}
+
+                {canDelete ? (
+                  <OwnerActionRow
+                    icon="trash-outline"
+                    label={t('myListings.deleteListing')}
+                    onPress={handleDeleteListing}
+                    disabled={ownerActionBusy}
+                    variant="danger"
+                  />
+                ) : null}
+              </View>
             </Card>
           ) : null}
         </View>
@@ -1560,7 +1562,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     marginBottom: space[1],
   },
-  ownerBtn: { marginBottom: space[2] },
   rejectionBadge: {
     alignSelf: 'flex-start',
     alignItems: 'center',

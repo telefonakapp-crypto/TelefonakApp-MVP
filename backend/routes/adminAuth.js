@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const pool = require('../config/database');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
-const { toPublicAdmin } = require('../utils/adminAuth');
+const { toSessionAdmin } = require('../utils/adminAuth');
 const { writeAuditLog } = require('../utils/auditLog');
 const { getAdminJwtSecret, ADMIN_JWT_ISS, ADMIN_JWT_AUD } = require('../config/env');
 const { adminLoginLimiter } = require('../middleware/rateLimits');
@@ -96,7 +96,7 @@ router.post(
 
       res.json({
         token,
-        admin: toPublicAdmin(refreshed.rows[0]),
+        admin: toSessionAdmin(refreshed.rows[0]),
       });
 
       await writeAuditLog({

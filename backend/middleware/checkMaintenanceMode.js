@@ -8,6 +8,7 @@ const MAINTENANCE_MESSAGE =
  * - /api/status — public probe for mobile cold-start / refresh
  * - /api/health — ops health checks
  * - /api/settings/public — contact email/phone for Support during outages
+ * - /api/auth/refresh — rotate customer sessions without hitting marketplace APIs
  * - /api/admin/* — Admin Dashboard + admin auth (enforced by path prefix)
  */
 function isExemptFromMaintenance(req) {
@@ -16,7 +17,8 @@ function isExemptFromMaintenance(req) {
   if (
     path === '/api/status' ||
     path === '/api/health' ||
-    path === '/api/settings/public'
+    path === '/api/settings/public' ||
+    path === '/api/auth/refresh'
   ) {
     return true;
   }

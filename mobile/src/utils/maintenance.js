@@ -3,7 +3,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { Alert } from 'react-native';
 import { API_BASE_URL } from '../config/apiConfig';
-import { getAuthToken, classifyAuthToken } from './authSession';
+import { resolveStoredSession } from './authSession';
+import { resolvePostMaintenanceRoute } from './sessionRestore';
 
 export const MAINTENANCE_MESSAGE =
   'Telefonak is currently undergoing scheduled maintenance.';
@@ -86,7 +87,8 @@ export function isMaintenanceExemptRequestUrl(url) {
   return (
     value.includes('/status') ||
     value.includes('/settings/public') ||
-    value.includes('/health')
+    value.includes('/health') ||
+    value.includes('/auth/refresh')
   );
 }
 
@@ -236,21 +238,9 @@ export function enterMaintenanceMode() {
 }
 
 /**
- * Read session without clearing AsyncStorage.
- * Maintenance exit must never wipe JWT as a side effect of classification.
- */
-export async function peekStoredSession() {
-  const token = await getAuthToken();
-  const kind = classifyAuthToken(token);
-  if (!token || kind === 'none') {
-    return { token: null, kind: 'none' };
-  }
-  return { token, kind };
-}
-
-/**
  * After maintenance ends, restore the normal cold-start route.
- * Authentication is preserved — we never clear authToken here.
+ * Uses the same session resolver as App boot so an expired access JWT
+ * with a live refresh token still returns the user Home — never AuthChoice.
  */
 export async function exitMaintenanceMode() {
   clearMaintenanceModeFlag();
@@ -258,14 +248,12 @@ export async function exitMaintenanceMode() {
   if (!navigationRef?.isReady?.()) return;
 
   const onboarding = await AsyncStorage.getItem('hasSeenOnboarding');
-  const session = await peekStoredSession();
-
-  let routeName = 'AuthChoice';
-  if (onboarding !== 'true') {
-    routeName = 'Onboarding';
-  } else if (session.kind === 'customer') {
-    routeName = 'Home';
-  }
+  const session = await resolveStoredSession();
+  const routeName = resolvePostMaintenanceRoute({
+    hasSeenOnboarding: onboarding === 'true',
+    sessionKind: session.kind,
+    refreshToken: session.refreshToken,
+  });
 
   navigationRef.dispatch(
     CommonActions.reset({

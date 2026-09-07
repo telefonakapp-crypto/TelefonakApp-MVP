@@ -44,6 +44,43 @@ async function countActiveModelStorages(pool, modelId) {
   return result.rows[0].count;
 }
 
+async function countActiveModelWatchCaseSizes(pool, modelId) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS count
+     FROM model_watch_case_sizes mwcs
+     JOIN watch_case_sizes wcs ON wcs.id = mwcs.case_size_id
+     WHERE mwcs.model_id = $1
+       AND mwcs.is_active = TRUE`,
+    [modelId]
+  );
+  return result.rows[0].count;
+}
+
+async function countActiveModelWatchConnectivities(pool, modelId) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS count
+     FROM model_watch_connectivities mwc
+     JOIN watch_connectivities wc ON wc.id = mwc.connectivity_id
+     WHERE mwc.model_id = $1
+       AND mwc.is_active = TRUE
+       AND wc.is_active = TRUE`,
+    [modelId]
+  );
+  return result.rows[0].count;
+}
+
+async function countActiveModelColors(pool, modelId) {
+  const result = await pool.query(
+    `SELECT COUNT(*)::int AS count
+     FROM model_colors mc
+     JOIN colors c ON c.id = mc.color_id
+     WHERE mc.model_id = $1
+       AND mc.is_active = TRUE`,
+    [modelId]
+  );
+  return result.rows[0].count;
+}
+
 async function validatePhoneListingAttributes(pool, body, modelId, resolveLegacyStorageId) {
   if (isPresent(body.model_watch_case_size_id) || isPresent(body.model_watch_connectivity_id)) {
     return { error: 'Watch attributes are not supported for phones' };
@@ -104,50 +141,70 @@ async function validateWatchListingAttributes(pool, body, modelId, resolveLegacy
     return { error: 'SIM configuration is not supported for smartwatches' };
   }
 
-  if (!isPresent(body.model_watch_case_size_id)) {
+  const [activeSizeCount, activeConnectivityCount, activeColorCount, activeStorageCount] =
+    await Promise.all([
+      countActiveModelWatchCaseSizes(pool, modelId),
+      countActiveModelWatchConnectivities(pool, modelId),
+      countActiveModelColors(pool, modelId),
+      countActiveModelStorages(pool, modelId),
+    ]);
+
+  let model_watch_case_size_id = null;
+  if (isPresent(body.model_watch_case_size_id)) {
+    const sizeResult = await pool.query(
+      `SELECT id, model_id
+       FROM model_watch_case_sizes
+       WHERE id = $1 AND is_active = TRUE`,
+      [body.model_watch_case_size_id]
+    );
+    if (sizeResult.rows.length === 0 || sizeResult.rows[0].model_id !== modelId) {
+      return { error: 'Invalid case size for this model' };
+    }
+    model_watch_case_size_id = parseInt(body.model_watch_case_size_id, 10);
+  } else if (activeSizeCount > 0) {
     return { error: 'Case size is required for smartwatches' };
   }
-  if (!isPresent(body.model_watch_connectivity_id)) {
+
+  let model_watch_connectivity_id = null;
+  if (isPresent(body.model_watch_connectivity_id)) {
+    const connectivityResult = await pool.query(
+      `SELECT mwc.id, mwc.model_id
+       FROM model_watch_connectivities mwc
+       JOIN watch_connectivities wc ON wc.id = mwc.connectivity_id
+       WHERE mwc.id = $1
+         AND mwc.is_active = TRUE
+         AND wc.is_active = TRUE`,
+      [body.model_watch_connectivity_id]
+    );
+    if (
+      connectivityResult.rows.length === 0 ||
+      connectivityResult.rows[0].model_id !== modelId
+    ) {
+      return { error: 'Invalid connectivity option for this model' };
+    }
+    model_watch_connectivity_id = parseInt(body.model_watch_connectivity_id, 10);
+  } else if (activeConnectivityCount > 0) {
     return { error: 'Connectivity is required for smartwatches' };
   }
-  if (!isPresent(body.model_color_id)) {
+
+  let color_id = null;
+  let model_color_id = null;
+  if (isPresent(body.model_color_id)) {
+    const mcResult = await pool.query(
+      `SELECT mc.id, mc.model_id, mc.color_id
+       FROM model_colors mc
+       WHERE mc.id = $1 AND mc.is_active = TRUE`,
+      [body.model_color_id]
+    );
+    if (mcResult.rows.length === 0 || mcResult.rows[0].model_id !== modelId) {
+      return { error: 'Invalid color for this model' };
+    }
+    color_id = mcResult.rows[0].color_id;
+    model_color_id = parseInt(body.model_color_id, 10);
+  } else if (activeColorCount > 0) {
     return { error: 'Color is required for smartwatches' };
   }
 
-  const sizeResult = await pool.query(
-    `SELECT id, model_id
-     FROM model_watch_case_sizes
-     WHERE id = $1 AND is_active = TRUE`,
-    [body.model_watch_case_size_id]
-  );
-  if (sizeResult.rows.length === 0 || sizeResult.rows[0].model_id !== modelId) {
-    return { error: 'Invalid case size for this model' };
-  }
-
-  const connectivityResult = await pool.query(
-    `SELECT mwc.id, mwc.model_id
-     FROM model_watch_connectivities mwc
-     JOIN watch_connectivities wc ON wc.id = mwc.connectivity_id
-     WHERE mwc.id = $1
-       AND mwc.is_active = TRUE
-       AND wc.is_active = TRUE`,
-    [body.model_watch_connectivity_id]
-  );
-  if (connectivityResult.rows.length === 0 || connectivityResult.rows[0].model_id !== modelId) {
-    return { error: 'Invalid connectivity option for this model' };
-  }
-
-  const mcResult = await pool.query(
-    `SELECT mc.id, mc.model_id, mc.color_id
-     FROM model_colors mc
-     WHERE mc.id = $1 AND mc.is_active = TRUE`,
-    [body.model_color_id]
-  );
-  if (mcResult.rows.length === 0 || mcResult.rows[0].model_id !== modelId) {
-    return { error: 'Invalid color for this model' };
-  }
-
-  const activeStorageCount = await countActiveModelStorages(pool, modelId);
   let storage_id = null;
   let model_storage_id = null;
 
@@ -178,12 +235,12 @@ async function validateWatchListingAttributes(pool, body, modelId, resolveLegacy
 
   return {
     storage_id,
-    color_id: mcResult.rows[0].color_id,
+    color_id,
     model_storage_id,
-    model_color_id: parseInt(body.model_color_id, 10),
+    model_color_id,
     sim_configuration_id: null,
-    model_watch_case_size_id: parseInt(body.model_watch_case_size_id, 10),
-    model_watch_connectivity_id: parseInt(body.model_watch_connectivity_id, 10),
+    model_watch_case_size_id,
+    model_watch_connectivity_id,
   };
 }
 
@@ -252,6 +309,9 @@ module.exports = {
   isPresent: isPresent,
   resolveModelCategory: resolveModelCategory,
   countActiveModelStorages: countActiveModelStorages,
+  countActiveModelWatchCaseSizes: countActiveModelWatchCaseSizes,
+  countActiveModelWatchConnectivities: countActiveModelWatchConnectivities,
+  countActiveModelColors: countActiveModelColors,
   validateListingCatalogAttributes: validateListingCatalogAttributes,
   LISTING_IDENTITY_JOINS,
   LISTING_IDENTITY_JOINS: LISTING_IDENTITY_JOINS,

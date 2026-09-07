@@ -5,6 +5,8 @@ import { UserStatusBadge } from './UsersTable';
 import { ListingStatusBadge } from '../listings/ListingStatusBadge';
 import { ConfirmModal } from '../listings/ConfirmModal';
 import { getListingDisplayName } from '../../utils/listingDisplayName';
+import { useAuth } from '../../hooks/useAuth';
+import { PERMISSIONS } from '../../auth/permissions';
 
 function formatDate(value?: string | null) {
   if (!value) return '—';
@@ -41,6 +43,8 @@ type UserDetailDrawerProps = {
 export function UserDetailDrawer({ userId, onClose }: UserDetailDrawerProps) {
   const open = userId != null;
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
+  const canWriteUsers = hasPermission(PERMISSIONS.USERS_WRITE);
   const [confirmAction, setConfirmAction] = useState<'enable' | 'disable' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -223,7 +227,7 @@ export function UserDetailDrawer({ userId, onClose }: UserDetailDrawerProps) {
             ) : null}
           </div>
 
-          {user ? (
+          {user && canWriteUsers ? (
             <div className="border-t border-slate-200 p-4">
               {user.is_active ? (
                 <button

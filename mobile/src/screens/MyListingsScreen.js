@@ -9,7 +9,6 @@ import {
   RefreshControl,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -30,6 +29,8 @@ import {
   IconButton,
   BottomSheet,
   HorizontalCardSkeleton,
+  OwnerActionRow,
+  ownerActionListStyle,
 } from '../components/ui';
 import { MyListingCard } from '../components/MyListingCard';
 
@@ -228,7 +229,7 @@ export default function MyListingsScreen() {
     if (caps.canMarkSold) {
       items.push({
         key: 'sold',
-        icon: 'checkmark-circle-outline',
+        icon: 'pricetag-outline',
         label: t('myListings.markAsSold'),
         onPress: () => runMenuAction((l) => handleMarkAsSold(l.id)),
       });
@@ -262,7 +263,7 @@ export default function MyListingsScreen() {
 
     items.push({
       key: 'share',
-      icon: 'share-outline',
+      icon: 'share-social-outline',
       label: t('listingDetails.shareListing'),
       onPress: () => runMenuAction((l) => handleShareListing(l)),
     });
@@ -556,51 +557,15 @@ export default function MyListingsScreen() {
         title={t('myListings.manageListing') || 'Manage listing'}
         maxHeight="55%"
       >
-        <View style={styles.menuList}>
+        <View style={[ownerActionListStyle, styles.menuList]}>
           {overflowItems.map((item) => (
-            <TouchableOpacity
+            <OwnerActionRow
               key={item.key}
-              style={[styles.menuRow, getFlexDirection(isRTL, 'row')]}
+              icon={item.icon}
+              label={item.label}
               onPress={item.onPress}
-              activeOpacity={0.7}
-            >
-              <View
-                style={[
-                  styles.menuIconWrap,
-                  {
-                    backgroundColor: item.destructive
-                      ? 'rgba(239, 68, 68, 0.10)'
-                      : colors.surfaceContainerLow,
-                  },
-                ]}
-              >
-                <Ionicons
-                  name={item.icon}
-                  size={18}
-                  color={
-                    item.destructive
-                      ? colors.error
-                      : item.muted
-                        ? colors.textMuted
-                        : colors.text
-                  }
-                />
-              </View>
-              <Text
-                style={[
-                  styles.menuLabel,
-                  {
-                    color: item.destructive
-                      ? colors.error
-                      : item.muted
-                        ? colors.textMuted
-                        : colors.text,
-                  },
-                ]}
-              >
-                {item.label}
-              </Text>
-            </TouchableOpacity>
+              variant={item.destructive ? 'danger' : 'neutral'}
+            />
           ))}
         </View>
       </BottomSheet>
@@ -679,24 +644,5 @@ const styles = StyleSheet.create({
   },
   menuList: {
     paddingBottom: space[4],
-    gap: space[1],
-  },
-  menuRow: {
-    alignItems: 'center',
-    gap: space[3],
-    paddingVertical: space[3],
-    paddingHorizontal: space[1],
-  },
-  menuIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  menuLabel: {
-    fontFamily: fonts.bodyMedium,
-    fontSize: 16,
-    flex: 1,
   },
 });

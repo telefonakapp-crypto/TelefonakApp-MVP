@@ -1,6 +1,8 @@
 const express = require('express');
 const pool = require('../config/database');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
+const requirePermission = require('../middleware/requirePermission');
+const { PERMISSIONS } = require('../utils/adminAuth');
 const { resolveBaseUrl } = require('../utils/baseUrl');
 const { LISTING_STATUS, LISTING_IS_TIP_SQL } = require('../utils/listingStatus');
 const {
@@ -279,7 +281,10 @@ router.get('/:id(\\d+)', async (req, res) => {
 /**
  * PUT /api/admin/users/:id/status
  */
-router.put('/:id(\\d+)/status', async (req, res) => {
+router.put(
+  '/:id(\\d+)/status',
+  requirePermission(PERMISSIONS.USERS_WRITE),
+  async (req, res) => {
   try {
     const { id } = req.params;
 

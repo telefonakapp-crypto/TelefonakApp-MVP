@@ -1,6 +1,8 @@
 const express = require('express');
 const pool = require('../config/database');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
+const requirePermission = require('../middleware/requirePermission');
+const { PERMISSIONS } = require('../utils/adminAuth');
 const { resolveBaseUrl } = require('../utils/baseUrl');
 const { LISTING_STATUS, listingIsTipSql } = require('../utils/listingStatus');
 const { moderateListing } = require('../utils/moderateListing');
@@ -303,23 +305,31 @@ router.get('/:id(\\d+)', verifyAdminAuth, async (req, res) => {
  * POST /api/admin/listings/:id/approve
  * Admin Web approve (JWT from admins table).
  */
-router.post('/:id(\\d+)/approve', verifyAdminAuth, (req, res) =>
-  moderateListing(req, res, {
-    status: LISTING_STATUS.APPROVED,
-    message: 'Listing approved successfully',
-  })
+router.post(
+  '/:id(\\d+)/approve',
+  verifyAdminAuth,
+  requirePermission(PERMISSIONS.LISTINGS_MODERATE),
+  (req, res) =>
+    moderateListing(req, res, {
+      status: LISTING_STATUS.APPROVED,
+      message: 'Listing approved successfully',
+    })
 );
 
 /**
  * POST /api/admin/listings/:id/decline
  * Admin Web decline — reason required and stored on the listing.
  */
-router.post('/:id(\\d+)/decline', verifyAdminAuth, (req, res) =>
-  moderateListing(req, res, {
-    status: LISTING_STATUS.DECLINED,
-    message: 'Listing declined successfully',
-    requireReason: true,
-  })
+router.post(
+  '/:id(\\d+)/decline',
+  verifyAdminAuth,
+  requirePermission(PERMISSIONS.LISTINGS_MODERATE),
+  (req, res) =>
+    moderateListing(req, res, {
+      status: LISTING_STATUS.DECLINED,
+      message: 'Listing declined successfully',
+      requireReason: true,
+    })
 );
 
 /**
@@ -327,7 +337,11 @@ router.post('/:id(\\d+)/decline', verifyAdminAuth, (req, res) =>
  * Soft-delete an approved listing (status → deleted). Removes it from the
  * marketplace without creating a revision.
  */
-router.post('/:id(\\d+)/delete', verifyAdminAuth, async (req, res) => {
+router.post(
+  '/:id(\\d+)/delete',
+  verifyAdminAuth,
+  requirePermission(PERMISSIONS.LISTINGS_MODERATE),
+  async (req, res) => {
   const { id } = req.params;
 
   try {

@@ -197,10 +197,10 @@ router.get('/models/:modelId/watch-options', async (req, res) => {
       storages,
       colors,
       required: {
-        size: true,
-        connectivity: true,
+        size: sizesResult.rows.length > 0,
+        connectivity: connectivitiesResult.rows.length > 0,
         storage: storages.length > 0,
-        color: true,
+        color: colors.length > 0,
       },
     });
   } catch (err) {

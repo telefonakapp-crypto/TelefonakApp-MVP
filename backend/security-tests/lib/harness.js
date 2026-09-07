@@ -191,8 +191,14 @@ async function loadFixtures() {
     `SELECT id, email, role
      FROM admins
      WHERE is_active = true
-     ORDER BY id
-     LIMIT 5`
+     ORDER BY
+       CASE role
+         WHEN 'super_admin' THEN 0
+         WHEN 'moderator' THEN 1
+         ELSE 2
+       END,
+       id
+     LIMIT 10`
   );
 
   const owner = listings.rows[0]

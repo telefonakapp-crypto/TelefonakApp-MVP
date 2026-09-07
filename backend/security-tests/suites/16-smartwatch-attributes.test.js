@@ -372,4 +372,58 @@ describe('16 — Smartwatch manufacturer attributes (Phase 2C)', () => {
     );
     assert.equal(phones.rows[0].count, 0);
   });
+
+  it('Samsung Gear S has no marketed case sizes', async () => {
+    const gearSId = await catalogModel('Samsung', 'Gear S');
+    const data = await watchOptions(gearSId);
+    assert.equal(data.sizes.length, 0);
+    assert.equal(data.required.size, false);
+    assert.ok(data.connectivities.length > 0);
+    assert.equal(data.required.connectivity, true);
+  });
+
+  it('watch-options required flags match option counts for every smartwatch', async () => {
+    const models = await pool.query(
+      `SELECT m.id, b.name AS brand, m.name AS model
+       FROM models m
+       JOIN brands b ON b.id = m.brand_id
+       JOIN categories c ON c.id = m.category_id
+       WHERE c.slug = 'smartwatches'
+       ORDER BY b.name, m.name`
+    );
+    assert.equal(models.rows.length, 83);
+
+    let modelsWithoutSizes = 0;
+    let modelsWithoutConnectivity = 0;
+    let modelsWithoutColors = 0;
+    for (const row of models.rows) {
+      const data = await watchOptions(row.id);
+      assert.equal(
+        data.required.size,
+        data.sizes.length > 0,
+        `${row.brand} ${row.model} size required flag`
+      );
+      assert.equal(
+        data.required.connectivity,
+        data.connectivities.length > 0,
+        `${row.brand} ${row.model} connectivity required flag`
+      );
+      assert.equal(
+        data.required.storage,
+        data.storages.length > 0,
+        `${row.brand} ${row.model} storage required flag`
+      );
+      assert.equal(
+        data.required.color,
+        data.colors.length > 0,
+        `${row.brand} ${row.model} color required flag`
+      );
+      if (data.sizes.length === 0) modelsWithoutSizes += 1;
+      if (data.connectivities.length === 0) modelsWithoutConnectivity += 1;
+      if (data.colors.length === 0) modelsWithoutColors += 1;
+    }
+    assert.equal(modelsWithoutSizes, 34);
+    assert.equal(modelsWithoutConnectivity, 1);
+    assert.equal(modelsWithoutColors, 8);
+  });
 });

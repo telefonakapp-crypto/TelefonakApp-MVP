@@ -63,7 +63,28 @@ async function createNotification(
     [userId || null, adminId || null, relatedListingId, type, title, message]
   );
 
-  return result.rows[0];
+  const row = result.rows[0];
+
+  // Inbox row is the source of truth for in-app Notifications.
+  // OS push is best-effort and must not fail the insert. Preference is
+  // enforced inside deliverPushForNotification (backend authority).
+  if (userId) {
+    const { deliverPushForNotification } = require('./pushDelivery');
+    deliverPushForNotification(pool, {
+      userId,
+      title,
+      message,
+      data: {
+        type,
+        notification_id: row.id,
+        related_listing_id: relatedListingId,
+      },
+    }).catch((error) => {
+      console.error('Push delivery failed:', error.message);
+    });
+  }
+
+  return row;
 }
 
 /**

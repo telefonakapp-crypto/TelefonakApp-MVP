@@ -20,6 +20,7 @@ import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import apiClient from '../utils/api';
 import { ignoreIfMaintenance } from '../utils/maintenance';
 import { clearAuthSession, getRefreshToken } from '../utils/authSession';
+import { deactivateDevicePushToken } from '../utils/pushRegistration';
 import { fonts, radii, space, ambientElevation } from '../utils/designTokens';
 import { EmptyState, IconButton, ProfileScreenSkeleton } from '../components/ui';
 
@@ -125,6 +126,11 @@ export default function ProfileScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
+              try {
+                await deactivateDevicePushToken();
+              } catch (error) {
+                console.warn('Push token deactivate skipped', error?.message || error);
+              }
               const refreshToken = await getRefreshToken();
               try {
                 await apiClient.post('/auth/logout', {

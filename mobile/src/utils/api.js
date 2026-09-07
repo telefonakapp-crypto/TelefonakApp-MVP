@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { API_BASE_URL, API_ORIGIN, resolveMediaUrl } from '../config/apiConfig';
 import * as AuthSession from './authSession';
+import { shouldClearAuthOnRefreshFailure } from './sessionRestore';
 
 // Shared axios client — base URL comes from EXPO_PUBLIC_API_URL via apiConfig.
 const apiClient = axios.create({
@@ -35,8 +36,16 @@ async function refreshAccessToken() {
       }
       await AuthSession.setAuthSession(response.data);
       return nextAccess;
-    } catch {
-      await AuthSession.clearAuthSession();
+    } catch (error) {
+      if (shouldClearAuthOnRefreshFailure(error)) {
+        await AuthSession.clearAuthSession();
+      } else if (typeof __DEV__ !== 'undefined' && __DEV__) {
+        const status = error?.response?.status;
+        console.log(
+          '[auth] refresh failed; session preserved',
+          status ? `status=${status}` : error?.code || error?.name || 'network'
+        );
+      }
       return null;
     } finally {
       refreshInFlight = null;

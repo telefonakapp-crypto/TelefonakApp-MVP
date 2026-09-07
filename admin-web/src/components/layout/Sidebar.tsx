@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
+import { PERMISSIONS } from '../../auth/permissions';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Dashboard', end: true, superAdminOnly: false },
@@ -15,8 +16,10 @@ const NAV_ITEMS = [
 ];
 
 export function Sidebar() {
-  const { isSuperAdmin } = useAuth();
-  const items = NAV_ITEMS.filter((item) => !item.superAdminOnly || isSuperAdmin);
+  const { hasPermission } = useAuth();
+  const items = NAV_ITEMS.filter(
+    (item) => !item.superAdminOnly || hasPermission(PERMISSIONS.ADMINS_MANAGE)
+  );
 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white">

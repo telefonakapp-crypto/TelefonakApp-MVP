@@ -604,7 +604,7 @@ export default function HomeScreen() {
           )}
         />
 
-        {/* Bottom Nav: Home | My Listings | Sell | Offers | Saved */}
+        {/* Bottom Nav: Home | Listings | Sell | Offers | Saved */}
         <HomeBottomNav
           unreadOffersCount={unreadOffersCount}
           onSell={handleCreateListing}
@@ -841,7 +841,7 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 16, // p-4
-    paddingBottom: 96, // pb-24 (for bottom nav)
+    paddingBottom: 120, // space for floating bottom nav
   },
   listingsSectionHeader: {
     marginBottom: 12,

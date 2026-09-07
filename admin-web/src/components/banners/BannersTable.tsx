@@ -12,17 +12,25 @@ function formatDate(value?: string | null) {
 
 type BannersTableProps = {
   banners: Banner[];
+  canWrite?: boolean;
   onEdit: (banner: Banner) => void;
   onDelete: (banner: Banner) => void;
 };
 
-export function BannersTable({ banners, onEdit, onDelete }: BannersTableProps) {
+export function BannersTable({
+  banners,
+  canWrite = true,
+  onEdit,
+  onDelete,
+}: BannersTableProps) {
   if (banners.length === 0) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-sm">
         <p className="text-sm font-medium text-slate-900">No banners found</p>
         <p className="mt-1 text-sm text-slate-500">
-          Create a banner or adjust your filters.
+          {canWrite
+            ? 'Create a banner or adjust your filters.'
+            : 'Adjust your filters to find a banner.'}
         </p>
       </div>
     );
@@ -42,7 +50,7 @@ export function BannersTable({ banners, onEdit, onDelete }: BannersTableProps) {
               <th className="px-4 py-3">Start Date</th>
               <th className="px-4 py-3">End Date</th>
               <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3">Actions</th>
+              {canWrite ? <th className="px-4 py-3">Actions</th> : null}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
@@ -76,24 +84,26 @@ export function BannersTable({ banners, onEdit, onDelete }: BannersTableProps) {
                 <td className="px-4 py-3">
                   <BannerStatusBadge status={banner.status} />
                 </td>
-                <td className="px-4 py-3">
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onEdit(banner)}
-                      className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onDelete(banner)}
-                      className="rounded-md border border-red-200 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50"
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </td>
+                {canWrite ? (
+                  <td className="px-4 py-3">
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onEdit(banner)}
+                        className="rounded-md border border-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDelete(banner)}
+                        className="rounded-md border border-red-200 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-50"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                ) : null}
               </tr>
             ))}
           </tbody>

@@ -65,6 +65,7 @@ export type AdminListingDetail = {
   brand_name: string;
   model_name: string;
   capacity_gb?: number | null;
+  storage_display: string | null;
   color_name?: string | null;
   color_display_name?: string | null;
   color_hex?: string | null;

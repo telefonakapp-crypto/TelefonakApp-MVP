@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 const pool = require('../config/database');
-const { toPublicAdmin } = require('../utils/adminAuth');
+const { toSessionAdmin, isKnownAdminRole } = require('../utils/adminAuth');
 const {
   getAdminJwtSecret,
   ADMIN_JWT_ISS,
@@ -60,8 +60,13 @@ async function verifyAdminAuth(req, res, next) {
       return res.status(403).json({ error: 'Admin account is inactive' });
     }
 
+    if (!isKnownAdminRole(admin.role)) {
+      return res.status(403).json({ error: 'Insufficient permissions' });
+    }
+
     req.adminId = admin.id;
-    req.admin = toPublicAdmin(admin);
+    // Role and permissions always come from the database row, not the JWT claim.
+    req.admin = toSessionAdmin(admin);
     // Kept for password-change verification only; never send to clients.
     req.adminPasswordHash = admin.password_hash;
     next();

@@ -150,6 +150,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     paddingTop: 6,
     paddingRight: 16,
+    transform: [{ translateY: 30 }],
   },
   languageTrack: {
     flexDirection: 'row',

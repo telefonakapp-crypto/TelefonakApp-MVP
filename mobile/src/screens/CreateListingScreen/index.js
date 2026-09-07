@@ -29,6 +29,8 @@ import {
   colorLabel,
   optionById,
   reconcileWatchFormFields,
+  catalogWatchStep1Issue,
+  catalogWatchColorIssue,
   buildCatalogPayload,
   OTHER_BRAND_ID,
   emptyCustomFields,
@@ -522,24 +524,9 @@ export default function CreateListingScreen() {
           Alert.alert('Error', t('createListing.watchOptionsLoadFailed'));
           return false;
         }
-        if (!(watchOptions.sizes || []).length) {
-          Alert.alert('Error', t('createListing.noCaseSizeOptions'));
-          return false;
-        }
-        if (!formData.model_watch_case_size_id) {
-          Alert.alert('Error', t('createListing.pleaseSelectCaseSize'));
-          return false;
-        }
-        if (!(watchOptions.connectivities || []).length) {
-          Alert.alert('Error', t('createListing.noConnectivityOptions'));
-          return false;
-        }
-        if (!formData.model_watch_connectivity_id) {
-          Alert.alert('Error', t('createListing.pleaseSelectConnectivity'));
-          return false;
-        }
-        if ((watchOptions.storages || []).length > 0 && !formData.model_storage_id) {
-          Alert.alert('Error', t('createListing.pleaseSelectStorage'));
+        const step1Issue = catalogWatchStep1Issue(formData, watchOptions);
+        if (step1Issue) {
+          Alert.alert('Error', t(`createListing.${step1Issue}`));
           return false;
         }
         return true;
@@ -579,7 +566,13 @@ export default function CreateListingScreen() {
         }
         return true;
       }
-      if (!formData.model_color_id) {
+      if (isSmartwatch) {
+        const colorIssue = catalogWatchColorIssue(formData, watchOptions);
+        if (colorIssue) {
+          Alert.alert('Error', t(`createListing.${colorIssue}`));
+          return false;
+        }
+      } else if (!formData.model_color_id) {
         Alert.alert('Error', t('createListing.pleaseSelectColor'));
         return false;
       }
@@ -662,19 +655,16 @@ export default function CreateListingScreen() {
           setStep(1);
           return;
         }
-        if (!formData.model_watch_case_size_id) {
-          Alert.alert('Error', t('createListing.pleaseSelectCaseSize'));
-          goToField('caseSize');
-          return;
-        }
-        if (!formData.model_watch_connectivity_id) {
-          Alert.alert('Error', t('createListing.pleaseSelectConnectivity'));
-          goToField('connectivity');
-          return;
-        }
-        if ((watchOptions.storages || []).length > 0 && !formData.model_storage_id) {
-          Alert.alert('Error', 'Please select storage');
-          goToField('storage');
+        const step1Issue = catalogWatchStep1Issue(formData, watchOptions);
+        if (step1Issue) {
+          Alert.alert('Error', t(`createListing.${step1Issue}`));
+          goToField(
+            step1Issue === 'pleaseSelectConnectivity'
+              ? 'connectivity'
+              : step1Issue === 'pleaseSelectStorage'
+                ? 'storage'
+                : 'caseSize'
+          );
           return;
         }
       } else if (!formData.model_storage_id) {
@@ -682,7 +672,14 @@ export default function CreateListingScreen() {
         goToField('storage');
         return;
       }
-      if (!formData.model_color_id) {
+      if (isSmartwatch) {
+        const colorIssue = catalogWatchColorIssue(formData, watchOptions);
+        if (colorIssue) {
+          Alert.alert('Error', t(`createListing.${colorIssue}`));
+          goToField('color');
+          return;
+        }
+      } else if (!formData.model_color_id) {
         Alert.alert('Error', 'Please select a color');
         goToField('color');
         return;
@@ -1380,12 +1377,22 @@ export default function CreateListingScreen() {
                       : selectedColorLabel
                   }
                   placeholder={
-                    isSmartwatch
-                      ? t('createListing.selectColorFinish') || t('createListing.selectColor')
-                      : t('createListing.selectColor') || 'Select color'
+                    isSmartwatch &&
+                    formData.model_id &&
+                    watchColors.length === 0 &&
+                    !loadingDependentOptions
+                      ? t('createListing.noColorOptions')
+                      : isSmartwatch
+                        ? t('createListing.selectColorFinish') || t('createListing.selectColor')
+                        : t('createListing.selectColor') || 'Select color'
                   }
                   onPress={() => setActiveSheet('color')}
-                  disabled={!formData.model_id || loadingDependentOptions || !!watchOptionsError}
+                  disabled={
+                    !formData.model_id ||
+                    loadingDependentOptions ||
+                    !!watchOptionsError ||
+                    (isSmartwatch && watchColors.length === 0)
+                  }
                 />
                 {!isSmartwatch ? (
                   <SelectField

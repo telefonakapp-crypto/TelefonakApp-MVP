@@ -18,6 +18,7 @@ const {
 const MODEL_A = '__p2b_watch_a__';
 const MODEL_B = '__p2b_watch_b__';
 const MODEL_NS = '__p2b_watch_ns__';
+const MODEL_NZ = '__p2b_watch_nz__';
 const SIZE_A = '__p2b_size_a__';
 const SIZE_B = '__p2b_size_b__';
 const SIZE_NS = '__p2b_size_ns__';
@@ -37,8 +38,8 @@ async function uploadOne(token) {
 
 async function cleanupPhase2bFixtures() {
   const models = await pool.query(
-    `SELECT id FROM models WHERE name IN ($1, $2, $3)`,
-    [MODEL_A, MODEL_B, MODEL_NS]
+    `SELECT id FROM models WHERE name IN ($1, $2, $3, $4)`,
+    [MODEL_A, MODEL_B, MODEL_NS, MODEL_NZ]
   );
   const modelIds = models.rows.map((r) => r.id);
   if (modelIds.length > 0) {
@@ -77,6 +78,7 @@ describe('15 — Smartwatch listing API (Phase 2B)', () => {
   let watchA;
   let watchB;
   let watchNs;
+  let watchNz;
   let createdListingIds = [];
   let ownedImageUrl;
   let baselineWatchListings;
@@ -144,6 +146,7 @@ describe('15 — Smartwatch listing API (Phase 2B)', () => {
     const modelAId = await insertWatchModel(MODEL_A, brandId, watchesCatId);
     const modelBId = await insertWatchModel(MODEL_B, brandId, watchesCatId);
     const modelNsId = await insertWatchModel(MODEL_NS, brandId, watchesCatId);
+    const modelNzId = await insertWatchModel(MODEL_NZ, brandId, watchesCatId);
 
     const sizeA = await pool.query(
       `INSERT INTO watch_case_sizes (size_mm, label, sort_order)
@@ -192,6 +195,11 @@ describe('15 — Smartwatch listing API (Phase 2B)', () => {
        VALUES ($1, $2, 0) RETURNING id`,
       [modelNsId, gpsId]
     );
+    const connNz = await pool.query(
+      `INSERT INTO model_watch_connectivities (model_id, connectivity_id, sort_order)
+       VALUES ($1, $2, 0) RETURNING id`,
+      [modelNzId, gpsId]
+    );
 
     const storageA = await pool.query(
       `INSERT INTO model_storages (model_id, storage_capacity_id, sort_order)
@@ -202,6 +210,11 @@ describe('15 — Smartwatch listing API (Phase 2B)', () => {
       `INSERT INTO model_storages (model_id, storage_capacity_id, sort_order)
        VALUES ($1, $2, 0) RETURNING id`,
       [modelBId, capacities.rows[1].id]
+    );
+    const storageNz = await pool.query(
+      `INSERT INTO model_storages (model_id, storage_capacity_id, sort_order)
+       VALUES ($1, $2, 0) RETURNING id`,
+      [modelNzId, capacities.rows[0].id]
     );
 
     const mcA = await pool.query(
@@ -218,6 +231,11 @@ describe('15 — Smartwatch listing API (Phase 2B)', () => {
       `INSERT INTO model_colors (model_id, color_id, sort_order)
        VALUES ($1, $2, 0) RETURNING id`,
       [modelNsId, colorAId]
+    );
+    const mcNz = await pool.query(
+      `INSERT INTO model_colors (model_id, color_id, sort_order)
+       VALUES ($1, $2, 0) RETURNING id`,
+      [modelNzId, colorAId]
     );
 
     watchA = {
@@ -242,6 +260,12 @@ describe('15 — Smartwatch listing API (Phase 2B)', () => {
       color_id: mcNs.rows[0].id,
       size_label: SIZE_NS,
     };
+    watchNz = {
+      model_id: modelNzId,
+      connectivity_id: connNz.rows[0].id,
+      storage_id: storageNz.rows[0].id,
+      color_id: mcNz.rows[0].id,
+    };
   });
 
   after(async () => {
@@ -259,18 +283,59 @@ describe('15 — Smartwatch listing API (Phase 2B)', () => {
   async function watchPayload(model, extra = {}) {
     const body = {
       model_id: model.model_id,
-      model_watch_case_size_id: model.size_id,
-      model_watch_connectivity_id: model.connectivity_id,
-      model_color_id: model.color_id,
       condition_id: fx.catalog.condition_id,
       price: 199,
       description: 'Phase 2B watch listing',
       images: extra.images || [ownedImageUrl],
     };
+    if (model.size_id) {
+      body.model_watch_case_size_id = model.size_id;
+    }
+    if (model.connectivity_id) {
+      body.model_watch_connectivity_id = model.connectivity_id;
+    }
+    if (model.color_id) {
+      body.model_color_id = model.color_id;
+    }
     if (model.storage_id) {
       body.model_storage_id = model.storage_id;
     }
     return { ...body, ...extra, images: extra.images || body.images };
+  }
+
+  async function liveWatchPayload(brandName, modelName, extra = {}) {
+    const model = await pool.query(
+      `SELECT m.id
+       FROM models m
+       JOIN brands b ON b.id = m.brand_id
+       JOIN categories c ON c.id = m.category_id
+       WHERE b.name = $1
+         AND m.name = $2
+         AND c.slug = 'smartwatches'`,
+      [brandName, modelName]
+    );
+    assert.ok(model.rows[0], `expected live catalog ${brandName} ${modelName}`);
+    const optionsRes = await api('GET', `/models/${model.rows[0].id}/watch-options`);
+    assert.equal(optionsRes.status, 200);
+    const options = optionsRes.data;
+    const body = {
+      model_id: model.rows[0].id,
+      condition_id: fx.catalog.condition_id,
+      price: 199,
+      description: `Live catalog ${brandName} ${modelName}`,
+      images: extra.images || [ownedImageUrl],
+    };
+    if (options.sizes[0]) body.model_watch_case_size_id = options.sizes[0].id;
+    if (options.connectivities[0]) {
+      body.model_watch_connectivity_id = options.connectivities[0].id;
+    }
+    if (options.colors[0]) body.model_color_id = options.colors[0].id;
+    if (options.storages[0]) body.model_storage_id = options.storages[0].id;
+    return {
+      modelId: model.rows[0].id,
+      options,
+      body: { ...body, ...extra, images: extra.images || body.images },
+    };
   }
 
   function phonePayload(extra = {}) {
@@ -451,6 +516,99 @@ describe('15 — Smartwatch listing API (Phase 2B)', () => {
     assert.equal(res.data.listing.sim_configuration_name, null);
     assert.equal(res.data.listing.case_size_label, SIZE_NS);
     assert.ok(res.data.listing.watch_connectivity_name);
+  });
+
+  it('watch-options marks size required only when the model has sizes', async () => {
+    const withSizes = await api('GET', `/models/${watchA.model_id}/watch-options`);
+    assert.equal(withSizes.status, 200);
+    assert.ok(withSizes.data.sizes.length > 0);
+    assert.equal(withSizes.data.required.size, true);
+
+    const withoutSizes = await api('GET', `/models/${watchNz.model_id}/watch-options`);
+    assert.equal(withoutSizes.status, 200);
+    assert.equal(withoutSizes.data.sizes.length, 0);
+    assert.equal(withoutSizes.data.required.size, false);
+    assert.equal(withoutSizes.data.required.connectivity, true);
+    assert.equal(withoutSizes.data.required.color, true);
+    assert.equal(withoutSizes.data.required.storage, true);
+  });
+
+  it('watch without case size succeeds when the model has none', async () => {
+    const body = await watchPayload(watchNz);
+    assert.equal(body.model_watch_case_size_id, undefined);
+    const res = trackListing(await api('POST', '/listings', { token, body }));
+    assert.ok([200, 201].includes(res.status), `got ${res.status} ${JSON.stringify(res.data)}`);
+    assert.equal(res.data.listing.model_watch_case_size_id, null);
+    assert.equal(res.data.listing.case_size_label, null);
+    assert.ok(res.data.listing.model_watch_connectivity_id);
+    assert.ok(res.data.listing.model_color_id);
+  });
+
+  it('watch null case size succeeds when the model has none', async () => {
+    const body = await watchPayload(watchNz, { model_watch_case_size_id: null });
+    const res = trackListing(await api('POST', '/listings', { token, body }));
+    assert.ok([200, 201].includes(res.status), `got ${res.status} ${JSON.stringify(res.data)}`);
+    assert.equal(res.data.listing.model_watch_case_size_id, null);
+  });
+
+  it('watch with another models size still fails when this model has none', async () => {
+    const body = await watchPayload(watchNz, { model_watch_case_size_id: watchA.size_id });
+    const res = await api('POST', '/listings', { token, body });
+    assert.equal(res.status, 400);
+    assert.equal(res.data.error, 'Invalid case size for this model');
+  });
+
+  it('watch edit allows omitted case size when the model has none', async () => {
+    const created = trackListing(
+      await api('POST', '/listings', { token, body: await watchPayload(watchNz) })
+    );
+    assert.ok(created.data.listing?.id);
+    const body = await watchPayload(watchNz);
+    delete body.images;
+    delete body.model_watch_case_size_id;
+    const res = await api('PUT', `/listings/${created.data.listing.id}`, { token, body });
+    assert.ok([200, 201].includes(res.status), `got ${res.status} ${JSON.stringify(res.data)}`);
+    assert.equal(res.data.listing.model_watch_case_size_id, null);
+    assert.equal(res.data.listing.case_size_label, null);
+  });
+
+  it('Samsung Gear S has no case sizes and listing create omits case size', async () => {
+    const live = await liveWatchPayload('Samsung', 'Gear S');
+    assert.equal(live.options.sizes.length, 0);
+    assert.equal(live.options.required.size, false);
+    assert.equal(live.body.model_watch_case_size_id, undefined);
+    assert.ok(live.body.model_watch_connectivity_id);
+    assert.ok(live.body.model_color_id);
+
+    const res = trackListing(await api('POST', '/listings', { token, body: live.body }));
+    assert.ok([200, 201].includes(res.status), `got ${res.status} ${JSON.stringify(res.data)}`);
+    assert.equal(res.data.listing.model_id, live.modelId);
+    assert.equal(res.data.listing.model_watch_case_size_id, null);
+    assert.equal(res.data.listing.case_size_label, null);
+  });
+
+  it('HUAWEI WATCH 2 Classic omits connectivity when the model has none', async () => {
+    const live = await liveWatchPayload('Huawei', 'HUAWEI WATCH 2 Classic');
+    assert.equal(live.options.connectivities.length, 0);
+    assert.equal(live.options.required.connectivity, false);
+    assert.equal(live.body.model_watch_connectivity_id, undefined);
+
+    const res = trackListing(await api('POST', '/listings', { token, body: live.body }));
+    assert.ok([200, 201].includes(res.status), `got ${res.status} ${JSON.stringify(res.data)}`);
+    assert.equal(res.data.listing.model_watch_connectivity_id, null);
+    assert.equal(res.data.listing.watch_connectivity_name, null);
+  });
+
+  it('Apple Watch Series 1 omits color when the model has none', async () => {
+    const live = await liveWatchPayload('Apple', 'Apple Watch Series 1');
+    assert.equal(live.options.colors.length, 0);
+    assert.equal(live.options.required.color, false);
+    assert.equal(live.body.model_color_id, undefined);
+
+    const res = trackListing(await api('POST', '/listings', { token, body: live.body }));
+    assert.ok([200, 201].includes(res.status), `got ${res.status} ${JSON.stringify(res.data)}`);
+    assert.equal(res.data.listing.model_color_id, null);
+    assert.equal(res.data.listing.color_id, null);
   });
 
   it('watch edit validates size', async () => {

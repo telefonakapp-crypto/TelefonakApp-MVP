@@ -17,3 +17,8 @@ export async function loginAdmin(email: string, password: string): Promise<AuthS
     user: data.admin,
   };
 }
+
+export async function fetchCurrentAdmin(): Promise<AuthSession['user']> {
+  const { data } = await apiClient.get<{ admin: AuthSession['user'] }>('/admin/auth/me');
+  return data.admin;
+}

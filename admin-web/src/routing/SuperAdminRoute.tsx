@@ -1,10 +1,11 @@
 import { Outlet } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import { PERMISSIONS } from '../auth/permissions';
 
 export function SuperAdminRoute() {
-  const { isSuperAdmin } = useAuth();
+  const { hasPermission } = useAuth();
 
-  if (!isSuperAdmin) {
+  if (!hasPermission(PERMISSIONS.ADMINS_MANAGE)) {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
         <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">

@@ -17,6 +17,8 @@ export type AdminUser = {
   updated_at?: string;
   created_by?: number | null;
   updated_by?: number | null;
+  /** Server-computed from the database role. Never trust a client-supplied value. */
+  permissions?: string[];
 };
 
 export type AuthSession = {

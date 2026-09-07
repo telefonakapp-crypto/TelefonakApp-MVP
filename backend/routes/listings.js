@@ -24,6 +24,7 @@ const {
   resolveSellerEditNextStatus,
 } = require('../utils/listingStatus');
 const { resolveBaseUrl } = require('../utils/baseUrl');
+const { assertListingPriceWithinLimits } = require('../utils/listingPrice');
 const {
   deleteLocalListingImageFile,
   copyLocalListingImageFile,
@@ -152,6 +153,15 @@ router.post('/listings', verifyToken,
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
+      }
+
+      try {
+        await assertListingPriceWithinLimits(req.body.price);
+      } catch (error) {
+        if (error.statusCode === 400) {
+          return res.status(400).json({ error: error.message });
+        }
+        throw error;
       }
 
       const { condition_id, battery_percentage, price, description, location, city_id, area_id, images } = req.body;
@@ -748,6 +758,15 @@ router.put('/listings/:id', verifyToken,
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
         return res.status(400).json({ errors: errors.array() });
+      }
+
+      try {
+        await assertListingPriceWithinLimits(req.body.price);
+      } catch (error) {
+        if (error.statusCode === 400) {
+          return res.status(400).json({ error: error.message });
+        }
+        throw error;
       }
 
       const { id } = req.params;

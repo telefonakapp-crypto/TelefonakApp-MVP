@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useBlocker } from 'react-router-dom';
 import { fetchSettings, updateSettings } from '../../services/settingsService';
 import { useAuth } from '../../hooks/useAuth';
+import { PERMISSIONS } from '../../auth/permissions';
 import type { MarketplaceSettings } from '../../types/settings';
 
 function settingsEqual(a: MarketplaceSettings, b: MarketplaceSettings) {
@@ -10,7 +11,8 @@ function settingsEqual(a: MarketplaceSettings, b: MarketplaceSettings) {
 }
 
 export function SettingsPage() {
-  const { isSuperAdmin } = useAuth();
+  const { hasPermission } = useAuth();
+  const canWriteSettings = hasPermission(PERMISSIONS.SETTINGS_WRITE);
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState<MarketplaceSettings | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -120,10 +122,10 @@ export function SettingsPage() {
           <h2 className="text-xl font-semibold text-slate-900">Settings</h2>
           <p className="mt-1 text-sm text-slate-500">
             Marketplace configuration
-            {!isSuperAdmin ? ' (read-only — Super Admin required to save)' : ''}
+            {!canWriteSettings ? ' (read-only — Super Admin required to save)' : ''}
           </p>
         </div>
-        {isSuperAdmin ? (
+        {canWriteSettings ? (
           <div className="flex gap-2">
             <button
               type="button"
@@ -159,7 +161,7 @@ export function SettingsPage() {
         <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{saveError}</p>
       ) : null}
 
-      <fieldset disabled={!isSuperAdmin} className="space-y-6 disabled:opacity-80">
+      <fieldset disabled={!canWriteSettings} className="space-y-6 disabled:opacity-80">
         <SettingsSection title="General">
           <TextField
             label="Marketplace Name"

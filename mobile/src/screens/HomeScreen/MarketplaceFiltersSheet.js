@@ -279,14 +279,22 @@ export default function MarketplaceFiltersSheet({
         visible={visible}
         animationType="slide"
         transparent={true}
+        presentationStyle="overFullScreen"
         onRequestClose={
           activeFilterSheet
             ? () => setActiveFilterSheet(null)
             : handleCancelFilters
         }
       >
+        <View style={styles.modalViewport}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          behavior={
+            activeFilterSheet
+              ? undefined
+              : Platform.OS === 'ios'
+                ? 'padding'
+                : 'height'
+          }
           style={styles.modalOverlay}
         >
           <View style={[styles.modalContent, { backgroundColor: colors.surface }]}>
@@ -765,9 +773,9 @@ export default function MarketplaceFiltersSheet({
             </View>
           </View>
         </KeyboardAvoidingView>
-      </Modal>
 
       <SearchablePickerSheet
+        embedded
         open={activeFilterSheet === 'brand'}
         onClose={() => setActiveFilterSheet(null)}
         title={t('home.brand')}
@@ -780,6 +788,7 @@ export default function MarketplaceFiltersSheet({
         searchPlaceholder={t('home.searchBrands') || 'Search brands'}
       />
       <SearchablePickerSheet
+        embedded
         open={activeFilterSheet === 'model'}
         onClose={() => setActiveFilterSheet(null)}
         title={t('home.model') || 'Model'}
@@ -792,6 +801,7 @@ export default function MarketplaceFiltersSheet({
         searchPlaceholder={t('home.searchModels') || 'Search models'}
       />
       <SearchablePickerSheet
+        embedded
         open={activeFilterSheet === 'storage'}
         onClose={() => setActiveFilterSheet(null)}
         title={t('home.storage') || 'Storage'}
@@ -812,6 +822,7 @@ export default function MarketplaceFiltersSheet({
         searchable={false}
       />
       <SearchablePickerSheet
+        embedded
         open={activeFilterSheet === 'condition'}
         onClose={() => setActiveFilterSheet(null)}
         title={t('home.condition')}
@@ -829,6 +840,7 @@ export default function MarketplaceFiltersSheet({
         searchable={false}
       />
       <SearchablePickerSheet
+        embedded
         open={activeFilterSheet === 'color'}
         onClose={() => setActiveFilterSheet(null)}
         title={isSmartwatchDraft ? t('home.colorFinish') : (t('home.color') || 'Color')}
@@ -846,6 +858,7 @@ export default function MarketplaceFiltersSheet({
         searchable={(isSmartwatchDraft ? watchColors : modelColors).length > 8}
       />
       <SearchablePickerSheet
+        embedded
         open={activeFilterSheet === 'caseSize'}
         onClose={() => setActiveFilterSheet(null)}
         title={t('home.caseSize')}
@@ -866,6 +879,7 @@ export default function MarketplaceFiltersSheet({
         searchable={false}
       />
       <SearchablePickerSheet
+        embedded
         open={activeFilterSheet === 'connectivity'}
         onClose={() => setActiveFilterSheet(null)}
         title={t('home.connectivity')}
@@ -886,6 +900,7 @@ export default function MarketplaceFiltersSheet({
         searchable={false}
       />
       <SearchablePickerSheet
+        embedded
         open={activeFilterSheet === 'city'}
         onClose={() => setActiveFilterSheet(null)}
         title={t('home.location') || 'Location'}
@@ -901,6 +916,7 @@ export default function MarketplaceFiltersSheet({
         searchPlaceholder={t('home.searchCities') || 'Search cities'}
       />
       <SearchablePickerSheet
+        embedded
         open={activeFilterSheet === 'area'}
         onClose={() => setActiveFilterSheet(null)}
         title={t('home.area') || 'Area'}
@@ -917,6 +933,8 @@ export default function MarketplaceFiltersSheet({
         }
         searchPlaceholder={t('home.searchAreas') || 'Search areas'}
       />
+        </View>
+      </Modal>
     </>
   );
 
@@ -929,12 +947,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(26, 28, 28, 0.4)',
     justifyContent: 'flex-end',
   },
+  modalViewport: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'visible',
+  },
   modalContent: {
     backgroundColor: '#ffffff',
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     height: '94%',
     overflow: 'hidden',
+    position: 'relative',
   },
   modalHeader: {
     flexDirection: 'row',

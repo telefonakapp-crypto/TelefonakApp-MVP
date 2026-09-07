@@ -43,6 +43,7 @@ export function SearchablePickerSheet({
   popularHeader = 'POPULAR BRANDS',
   allHeader = 'ALL BRANDS',
   manualEntry,
+  embedded = false,
 }) {
   const { colors } = useTheme();
   const { isRTL } = useLanguage();
@@ -192,7 +193,13 @@ export function SearchablePickerSheet({
   );
 
   return (
-    <BottomSheet open={open} onClose={onClose} title={title} maxHeight="78%">
+    <BottomSheet
+      open={open}
+      onClose={onClose}
+      title={title}
+      maxHeight="78%"
+      embedded={embedded}
+    >
       {searchable ? (
         <View
           style={[

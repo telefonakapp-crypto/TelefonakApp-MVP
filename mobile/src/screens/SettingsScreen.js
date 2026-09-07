@@ -10,41 +10,67 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import { fonts, radii, space, ambientElevation } from '../utils/designTokens';
 import { IconButton } from '../components/ui';
+import {
+  fetchPushPreference,
+  migrateLocalPushPreference,
+  updatePushPreference,
+  syncDevicePushRegistration,
+} from '../utils/pushRegistration';
 
 export default function SettingsScreen() {
   const navigation = useNavigation();
   const { colors, isDarkMode, toggleTheme } = useTheme();
   const { language, changeLanguage, t, isRTL } = useLanguage();
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(true);
+  const [preferenceReady, setPreferenceReady] = React.useState(false);
+  const [preferenceSaving, setPreferenceSaving] = React.useState(false);
 
   React.useEffect(() => {
-    // Load saved preference for push notifications
+    let cancelled = false;
     const loadPreference = async () => {
       try {
-        const stored = await AsyncStorage.getItem('pushNotificationsEnabled');
-        if (stored !== null) {
-          setNotificationsEnabled(stored === 'true');
+        const serverEnabled = await fetchPushPreference();
+        const enabled = await migrateLocalPushPreference(serverEnabled);
+        if (!cancelled) {
+          setNotificationsEnabled(enabled);
         }
       } catch (error) {
         console.error('Error loading notification preference:', error);
+      } finally {
+        if (!cancelled) setPreferenceReady(true);
       }
     };
 
     loadPreference();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleToggleNotifications = async (value) => {
+    if (preferenceSaving) return;
+    const previous = notificationsEnabled;
+    setNotificationsEnabled(value);
+    setPreferenceSaving(true);
     try {
-      setNotificationsEnabled(value);
-      await AsyncStorage.setItem('pushNotificationsEnabled', value ? 'true' : 'false');
+      const saved = await updatePushPreference(value);
+      setNotificationsEnabled(saved);
+      if (saved) {
+        const registration = await syncDevicePushRegistration({ requestPermission: true });
+        if (__DEV__ && !registration?.registered) {
+          console.log('[push] preference saved; device token not registered', registration?.reason);
+        }
+      }
     } catch (error) {
       console.error('Error saving notification preference:', error);
+      setNotificationsEnabled(previous);
+    } finally {
+      setPreferenceSaving(false);
     }
   };
 
@@ -75,6 +101,7 @@ export default function SettingsScreen() {
             <Switch
               value={notificationsEnabled}
               onValueChange={handleToggleNotifications}
+              disabled={!preferenceReady || preferenceSaving}
               trackColor={{ false: isDarkMode ? '#3f3f46' : '#e4e4e7', true: colors.primary }}
               thumbColor="#ffffff"
             />

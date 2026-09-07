@@ -1,8 +1,8 @@
-import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { getAuthToken } from '../utils/authSession';
 import apiClient from '../utils/api';
 import { logApiError } from '../utils/apiError';
+import { syncDevicePushRegistration } from '../utils/pushRegistration';
 
 const NotificationsContext = createContext(null);
 
@@ -32,13 +32,6 @@ export const NotificationsProvider = ({ children }) => {
       return;
     }
 
-    // Settings lets the user silence the badge entirely.
-    const pushPreference = await AsyncStorage.getItem('pushNotificationsEnabled');
-    if (pushPreference === 'false') {
-      setUnreadCount(0);
-      return;
-    }
-
     inFlight.current = true;
     try {
       const response = await apiClient.get('/notifications/unread-count');
@@ -64,6 +57,27 @@ export const NotificationsProvider = ({ children }) => {
   }, []);
 
   const clearUnreadCount = useCallback(() => setUnreadCount(0), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const token = await getAuthToken();
+      if (!token || cancelled) return;
+      try {
+        const response = await apiClient.get('/notifications/preferences');
+        if (cancelled || response.data.push_notifications_enabled !== true) return;
+        const registration = await syncDevicePushRegistration({ requestPermission: false });
+        if (__DEV__ && !cancelled && !registration?.registered) {
+          console.log('[push] launch registration skipped', registration?.reason);
+        }
+      } catch {
+        // Preference/token sync is best-effort on launch.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const value = useMemo(
     () => ({

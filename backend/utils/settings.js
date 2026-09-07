@@ -204,6 +204,16 @@ async function upsertSettings(updates, adminId, client = pool) {
     error.statusCode = 400;
     throw error;
   }
+  if (next.min_listing_price < 0 || !Number.isFinite(next.min_listing_price)) {
+    const error = new Error('Minimum listing price cannot be negative');
+    error.statusCode = 400;
+    throw error;
+  }
+  if (!(next.max_listing_price > 0) || !Number.isFinite(next.max_listing_price)) {
+    const error = new Error('Maximum listing price must be greater than 0');
+    error.statusCode = 400;
+    throw error;
+  }
 
   for (const [key, value] of entries) {
     const serialized = serializeSettingValue(key, value);

@@ -48,7 +48,7 @@ export default function MaintenanceScreen() {
       <View style={styles.content}>
         <View style={styles.logoWrap}>
           <Image
-            source={require('../../assets/telefonak-logo.png')}
+            source={require('../../assets/telefonak-app-icon-v5.png')}
             style={styles.logo}
             resizeMode="contain"
             accessibilityLabel="Telefonak"

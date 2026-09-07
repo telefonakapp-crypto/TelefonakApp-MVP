@@ -9,6 +9,8 @@ import {
 import { ListingStatusBadge } from './ListingStatusBadge';
 import { ConfirmModal } from './ConfirmModal';
 import { getListingDisplayName } from '../../utils/listingDisplayName';
+import { useAuth } from '../../hooks/useAuth';
+import { PERMISSIONS } from '../../auth/permissions';
 
 function formatPrice(price: number | string) {
   const value = typeof price === 'number' ? price : Number(price);
@@ -37,6 +39,8 @@ export function ListingDetailDrawer({
 }: ListingDetailDrawerProps) {
   const open = listingId != null;
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
+  const canModerateListings = hasPermission(PERMISSIONS.LISTINGS_MODERATE);
   const [activeImage, setActiveImage] = useState(0);
   const [confirmAction, setConfirmAction] = useState<
     'approve' | 'decline' | 'delete' | null
@@ -148,7 +152,8 @@ export function ListingDetailDrawer({
     status === 'resubmitted' ||
     status === 'updated' ||
     status === 'approved';
-  const showModerationActions = Boolean(listing) && (canApprove || canDecline || canDelete);
+  const showModerationActions =
+    canModerateListings && Boolean(listing) && (canApprove || canDecline || canDelete);
   const actionLoading =
     approveMutation.isPending || declineMutation.isPending || deleteMutation.isPending;
 

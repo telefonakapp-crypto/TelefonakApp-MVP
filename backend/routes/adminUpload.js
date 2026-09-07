@@ -1,5 +1,7 @@
 const express = require('express');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
+const requirePermission = require('../middleware/requirePermission');
+const { PERMISSIONS } = require('../utils/adminAuth');
 const { uploadLimiter } = require('../middleware/rateLimits');
 const {
   adminImageUpload,
@@ -17,6 +19,7 @@ router.post(
   '/image',
   uploadLimiter,
   verifyAdminAuth,
+  requirePermission(PERMISSIONS.UPLOAD_WRITE),
   adminImageUpload.single('image'),
   respondWithUploadedImage
 );

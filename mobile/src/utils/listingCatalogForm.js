@@ -39,6 +39,43 @@ export function optionById(options, id) {
   return (options || []).find((item) => sameCatalogId(item.id, id)) || null;
 }
 
+export function catalogHasOptions(options) {
+  return Array.isArray(options) && options.length > 0;
+}
+
+export function missingRequiredCatalogSelection(options, selectedId) {
+  return catalogHasOptions(options) && !selectedId;
+}
+
+/**
+ * Catalog watch step 1: a field is required only when that model has options.
+ * Empty options means not applicable — never "no options available" as an error.
+ */
+export function catalogWatchStep1Issue(formData, watchOptions) {
+  if (missingRequiredCatalogSelection(watchOptions?.sizes, formData?.model_watch_case_size_id)) {
+    return 'pleaseSelectCaseSize';
+  }
+  if (
+    missingRequiredCatalogSelection(
+      watchOptions?.connectivities,
+      formData?.model_watch_connectivity_id
+    )
+  ) {
+    return 'pleaseSelectConnectivity';
+  }
+  if (missingRequiredCatalogSelection(watchOptions?.storages, formData?.model_storage_id)) {
+    return 'pleaseSelectStorage';
+  }
+  return null;
+}
+
+export function catalogWatchColorIssue(formData, watchOptions) {
+  if (missingRequiredCatalogSelection(watchOptions?.colors, formData?.model_color_id)) {
+    return 'pleaseSelectColor';
+  }
+  return null;
+}
+
 /**
  * Drop stale watch filter values without auto-selecting a single storage option.
  * A lone storage value would silently narrow search results, so filters hide it instead.
@@ -182,19 +219,42 @@ export function buildCustomPayload(formData, { categoryId, isSmartwatch } = {}) 
   return payload;
 }
 
+function assignCatalogFkIfSelected(payload, key, options, selectedId) {
+  if (catalogHasOptions(options) && selectedId) {
+    payload[key] = selectedId;
+  }
+}
+
 export function buildCatalogPayload(formData, { isSmartwatch, watchOptions } = {}) {
   if (isSmartwatch) {
     const payload = {
       listing_source: 'catalog',
       model_id: formData.model_id,
-      model_watch_case_size_id: formData.model_watch_case_size_id,
-      model_watch_connectivity_id: formData.model_watch_connectivity_id,
-      model_color_id: formData.model_color_id,
     };
-    const storages = watchOptions?.storages || [];
-    if (storages.length > 0 && formData.model_storage_id) {
-      payload.model_storage_id = formData.model_storage_id;
-    }
+    assignCatalogFkIfSelected(
+      payload,
+      'model_watch_case_size_id',
+      watchOptions?.sizes,
+      formData.model_watch_case_size_id
+    );
+    assignCatalogFkIfSelected(
+      payload,
+      'model_watch_connectivity_id',
+      watchOptions?.connectivities,
+      formData.model_watch_connectivity_id
+    );
+    assignCatalogFkIfSelected(
+      payload,
+      'model_color_id',
+      watchOptions?.colors,
+      formData.model_color_id
+    );
+    assignCatalogFkIfSelected(
+      payload,
+      'model_storage_id',
+      watchOptions?.storages,
+      formData.model_storage_id
+    );
     return payload;
   }
 

@@ -85,25 +85,25 @@ export default function SellPhoneButton({
 
 const styles = StyleSheet.create({
   icon: {
-    width: 26,
-    height: 26,
+    width: 18,
+    height: 18,
     position: 'relative',
   },
   horizontalStroke: {
     position: 'absolute',
-    width: 26,
-    height: 4,
+    width: 18,
+    height: 2.5,
     left: 0,
-    top: 11,
-    borderRadius: 2,
+    top: 7.75,
+    borderRadius: 1.25,
   },
   verticalStroke: {
     position: 'absolute',
-    width: 4,
-    height: 26,
-    left: 11,
+    width: 2.5,
+    height: 18,
+    left: 7.75,
     top: 0,
-    borderRadius: 2,
+    borderRadius: 1.25,
   },
   highlight: {
     ...StyleSheet.absoluteFillObject,

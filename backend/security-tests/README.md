@@ -43,7 +43,7 @@ SECURITY_TEST_API_URL=http://127.0.0.1:3000 npm run test:security
 | `04-idor-offers` | Offer accept/reject/seen |
 | `05-idor-favorites` | Favorites auth |
 | `06-idor-notifications` | Notification ownership |
-| `07-admin-boundaries` | Admin gate + SEC-005 baseline |
+| `07-admin-boundaries` | Admin gate + RBAC (viewer cannot mutate) |
 | `08-uploads` | Upload auth + SEC-016 magic bytes |
 | `09-input-validation` | Offer/OTP/listing validation |
 | `10-rate-limiting` | OTP IP limiter |

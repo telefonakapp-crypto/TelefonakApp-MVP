@@ -1,14 +1,24 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/database');
+const { body, validationResult } = require('express-validator');
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 50;
 
 const verifyToken = require('../middleware/verifyToken').requireUserId;
+const {
+  isPushEnabledForUser,
+  registerPushToken,
+  deactivateUserPushToken,
+} = require('../utils/pushDelivery');
 
 // Every query below filters on req.user.userId — a user can only ever see their own rows.
 router.use(verifyToken);
+
+function parseBooleanFlag(value) {
+  return value === true || value === false ? value : null;
+}
 
 // GET /api/notifications — newest first, paginated
 router.get('/', async (req, res) => {
@@ -54,6 +64,111 @@ router.get('/unread-count', async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch unread count' });
   }
 });
+
+// GET /api/notifications/preferences
+router.get('/preferences', async (req, res) => {
+  try {
+    const enabled = await isPushEnabledForUser(pool, req.user.userId);
+    res.json({ push_notifications_enabled: enabled });
+  } catch (error) {
+    console.error('Error fetching notification preferences:', error);
+    res.status(500).json({ error: 'Failed to fetch notification preferences' });
+  }
+});
+
+// PATCH /api/notifications/preferences
+router.patch(
+  '/preferences',
+  [
+    body('push_notifications_enabled')
+      .exists()
+      .withMessage('push_notifications_enabled is required'),
+  ],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    const enabled = parseBooleanFlag(req.body.push_notifications_enabled);
+    if (enabled === null) {
+      return res.status(400).json({ error: 'push_notifications_enabled must be a boolean' });
+    }
+
+    // JWT userId only — ignore any client-supplied user id.
+    try {
+      const result = await pool.query(
+        `UPDATE users
+         SET push_notifications_enabled = $1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $2
+         RETURNING push_notifications_enabled`,
+        [enabled, req.user.userId]
+      );
+      if (result.rows.length === 0) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      res.json({
+        push_notifications_enabled: result.rows[0].push_notifications_enabled,
+      });
+    } catch (error) {
+      console.error('Error updating notification preferences:', error);
+      res.status(500).json({ error: 'Failed to update notification preferences' });
+    }
+  }
+);
+
+// PUT /api/notifications/push-token
+router.put(
+  '/push-token',
+  [body('expo_push_token').isString().withMessage('expo_push_token is required')],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    try {
+      const result = await registerPushToken(pool, {
+        userId: req.user.userId,
+        expoPushToken: req.body.expo_push_token,
+        platform: req.body.platform,
+      });
+      if (result.error) {
+        return res.status(400).json({ error: result.error });
+      }
+      res.json({ token: result.token });
+    } catch (error) {
+      console.error('Error registering push token:', error);
+      res.status(500).json({ error: 'Failed to register push token' });
+    }
+  }
+);
+
+// DELETE /api/notifications/push-token — deactivate this device token (logout)
+router.delete(
+  '/push-token',
+  [body('expo_push_token').isString().withMessage('expo_push_token is required')],
+  async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
+    try {
+      const result = await deactivateUserPushToken(pool, {
+        userId: req.user.userId,
+        expoPushToken: req.body.expo_push_token,
+      });
+      if (result.error) {
+        return res.status(400).json({ error: result.error });
+      }
+      res.json({ deactivated: result.deactivated });
+    } catch (error) {
+      console.error('Error deactivating push token:', error);
+      res.status(500).json({ error: 'Failed to deactivate push token' });
+    }
+  }
+);
 
 // PATCH /api/notifications/read-all
 router.patch('/read-all', async (req, res) => {
