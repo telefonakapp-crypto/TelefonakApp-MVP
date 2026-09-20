@@ -1,4 +1,5 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, { createContext, useState, useEffect, useContext, useCallback, useMemo } from 'react';
+import { Appearance } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   fonts as tokenFonts,
@@ -10,6 +11,12 @@ import {
   statusColors,
   brand,
 } from '../utils/designTokens';
+import {
+  THEME_STORAGE_KEY,
+  DEFAULT_THEME_MODE,
+  normalizeThemeMode,
+  resolveIsDarkMode,
+} from '../utils/themeMode';
 
 const ThemeContext = createContext();
 
@@ -104,21 +111,18 @@ const darkColors = {
 };
 
 export const ThemeProvider = ({ children }) => {
-  const [isDarkMode, setIsDarkMode] = useState(false);
+  const [themeMode, setThemeModeState] = useState(DEFAULT_THEME_MODE);
+  const [systemScheme, setSystemScheme] = useState(() => Appearance.getColorScheme());
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     const loadTheme = async () => {
       try {
-        const savedTheme = await AsyncStorage.getItem('themeMode');
-        if (savedTheme !== null) {
-          setIsDarkMode(savedTheme === 'dark');
-        } else {
-          setIsDarkMode(false);
-        }
+        const savedTheme = await AsyncStorage.getItem(THEME_STORAGE_KEY);
+        setThemeModeState(normalizeThemeMode(savedTheme));
       } catch (error) {
         console.error('Error loading theme:', error);
-        setIsDarkMode(false);
+        setThemeModeState(DEFAULT_THEME_MODE);
       } finally {
         setIsLoading(false);
       }
@@ -127,31 +131,49 @@ export const ThemeProvider = ({ children }) => {
     loadTheme();
   }, []);
 
-  const toggleTheme = async () => {
-    const newTheme = !isDarkMode;
-    setIsDarkMode(newTheme);
+  useEffect(() => {
+    const subscription = Appearance.addChangeListener(({ colorScheme }) => {
+      setSystemScheme(colorScheme);
+    });
+    return () => subscription.remove();
+  }, []);
+
+  const changeThemeMode = useCallback(async (nextMode) => {
+    const mode = normalizeThemeMode(nextMode);
+    setThemeModeState(mode);
     try {
-      await AsyncStorage.setItem('themeMode', newTheme ? 'dark' : 'light');
+      await AsyncStorage.setItem(THEME_STORAGE_KEY, mode);
     } catch (error) {
       console.error('Error saving theme:', error);
     }
-  };
+  }, []);
+
+  const isDarkMode = resolveIsDarkMode(themeMode, systemScheme);
+
+  const toggleTheme = useCallback(async () => {
+    await changeThemeMode(isDarkMode ? 'light' : 'dark');
+  }, [changeThemeMode, isDarkMode]);
 
   const colors = isDarkMode ? darkColors : lightColors;
 
-  const value = {
-    isDarkMode,
-    colors,
-    fonts: tokenFonts,
-    radii: tokenRadii,
-    space: tokenSpace,
-    type: tokenType,
-    gradients: tokenGradients,
-    elevation: ambientElevation,
-    statusColors,
-    toggleTheme,
-    isLoading,
-  };
+  const value = useMemo(
+    () => ({
+      themeMode,
+      changeThemeMode,
+      isDarkMode,
+      colors,
+      fonts: tokenFonts,
+      radii: tokenRadii,
+      space: tokenSpace,
+      type: tokenType,
+      gradients: tokenGradients,
+      elevation: ambientElevation,
+      statusColors,
+      toggleTheme,
+      isLoading,
+    }),
+    [themeMode, changeThemeMode, isDarkMode, colors, toggleTheme, isLoading]
+  );
 
   return (
     <ThemeContext.Provider value={value}>

@@ -17,16 +17,16 @@ import apiClient from '../utils/api';
 import { getApiErrorMessage, isNetworkError, logApiError } from '../utils/apiError';
 import * as AuthSession from '../utils/authSession';
 import { useLanguage } from '../context/LanguageContext';
+import { getFlexDirection, getMargin, getTextAlign } from '../utils/rtlStyles';
 import { fonts, brand, radii } from '../utils/designTokens';
 import {
   OTP_RESEND_COOLDOWN_SECONDS,
   classifyOtpRequestFailure,
-  formatOtpCooldownToast,
-  formatOtpRequestWindowToast,
   getResendCooldownFromSuccess,
   useOtpCooldown,
 } from '../utils/otpCooldown';
 import { showToast } from '../utils/toast';
+import { showDevOtpAlert } from '../utils/devOtpDiagnostic';
 
 export default function OTPScreen() {
   const [otp, setOtp] = useState('');
@@ -73,7 +73,7 @@ export default function OTPScreen() {
 
   const handleVerifyOTP = async () => {
     if (otp.length !== 4) {
-      Alert.alert('Error', 'Please enter the complete 4-digit OTP');
+      Alert.alert(t('common.error'), t('auth.completeOtp'));
       return;
     }
 
@@ -121,21 +121,21 @@ export default function OTPScreen() {
     } catch (error) {
       logApiError('OTPScreen.verifyOTP', error);
 
-      let message = 'Could not complete sign-in. Please try again.';
+      let message = t('auth.couldNotCompleteSignIn');
       if (error?.response) {
         // Only use OTP copy when the backend actually rejected the code.
-        message = getApiErrorMessage(error, 'Invalid or expired OTP. Please try again.');
+        message = getApiErrorMessage(error, t('auth.invalidOrExpiredOTP'));
       } else if (isNetworkError(error)) {
-        message = getApiErrorMessage(error, 'Please check your internet connection and try again.');
+        message = getApiErrorMessage(error, t('common.networkError'));
       } else if (
         /auth session|SecureStore|is not a function|storage is unavailable/i.test(
           String(error?.message || '')
         )
       ) {
-        message = 'Could not save your sign-in session. Please try again.';
+        message = t('auth.couldNotSaveSession');
       }
 
-      Alert.alert('Error', message);
+      Alert.alert(t('common.error'), message);
       setOtp('');
     } finally {
       setVerifying(false);
@@ -144,7 +144,7 @@ export default function OTPScreen() {
 
   const handleResendOTP = async () => {
     if (isCoolingDown) {
-      showToast(formatOtpCooldownToast(secondsLeft));
+      showToast(t('auth.otpCooldownWait').replace('{seconds}', String(secondsLeft)));
       return;
     }
 
@@ -159,25 +159,26 @@ export default function OTPScreen() {
       if (response.data) {
         startCooldown(getResendCooldownFromSuccess(response.data));
         setOtp('');
-        if (response.data.otp) {
-          Alert.alert('OTP', `Your OTP is: ${response.data.otp} (Development mode)`);
+        if (__DEV__) {
+          showDevOtpAlert(response.data, t('auth.otpSent'));
         }
       }
     } catch (error) {
       const failure = classifyOtpRequestFailure(error);
       if (failure.kind === 'resend_cooldown') {
         startCooldown(failure.seconds);
-        showToast(formatOtpCooldownToast(failure.seconds));
+        showToast(t('auth.otpCooldownWait').replace('{seconds}', String(failure.seconds)));
         return;
       }
       if (failure.kind === 'request_window') {
         // Hourly budget — do NOT drive the Resend countdown with multi-minute waits.
-        showToast(formatOtpRequestWindowToast(failure.seconds));
+        const minutes = Math.max(1, Math.ceil((Number(failure.seconds) || 60) / 60));
+        showToast(t('auth.otpRequestWindow').replace('{minutes}', String(minutes)));
         return;
       }
 
       logApiError('OTPScreen.resendOTP', error);
-      showToast(getApiErrorMessage(error, 'Failed to resend OTP. Please try again.'));
+      showToast(getApiErrorMessage(error, t('auth.failedToResendOTP')));
     } finally {
       endRequest();
       setResending(false);
@@ -198,8 +199,13 @@ export default function OTPScreen() {
       >
         <View style={styles.content}>
           {/* Header */}
-          <View style={styles.header}>
-            <TouchableOpacity onPress={goBack} style={styles.backButton}>
+          <View style={[styles.header, getFlexDirection(isRTL, 'row')]}>
+            <TouchableOpacity
+              onPress={goBack}
+              style={[styles.backButton, getMargin(isRTL, { left: -12, right: 0 })]}
+              accessibilityRole="button"
+              accessibilityLabel={t('common.back')}
+            >
               <Ionicons
                 name={isRTL ? 'arrow-forward' : 'arrow-back'}
                 size={24}
@@ -210,9 +216,12 @@ export default function OTPScreen() {
 
           <View style={styles.formContainer}>
             <View style={styles.titleContainer}>
-              <Text style={styles.title}>Verify it's you</Text>
-              <Text style={styles.description}>
-                We sent a code to <Text style={styles.phoneNumberBold}>+962 {phoneNumber}</Text>
+              <Text style={[styles.title, getTextAlign(isRTL, 'left')]}>
+                {t('auth.verifyItsYou')}
+              </Text>
+              <Text style={[styles.description, getTextAlign(isRTL, 'left')]}>
+                {t('auth.weSentACodeTo')}{' '}
+                <Text style={styles.phoneNumberBold}>+962 {phoneNumber}</Text>
               </Text>
             </View>
 
@@ -258,10 +267,10 @@ export default function OTPScreen() {
                   ]}
                 >
                   {isCoolingDown
-                    ? `Resend code in ${secondsLeft}s`
+                    ? t('auth.resendCodeIn').replace('{seconds}', String(secondsLeft))
                     : resending
-                      ? 'Sending...'
-                      : 'Resend Code'}
+                      ? t('auth.sending')
+                      : t('auth.resendCode')}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -274,7 +283,7 @@ export default function OTPScreen() {
               {verifying ? (
                 <ActivityIndicator color="#ffffff" />
               ) : (
-                <Text style={styles.verifyButtonText}>Verify Code</Text>
+                <Text style={styles.verifyButtonText}>{t('auth.verifyCode')}</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -303,7 +312,6 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   backButton: {
-    marginLeft: -12, // -ml-3 equivalent
     padding: 8,
   },
   formContainer: {

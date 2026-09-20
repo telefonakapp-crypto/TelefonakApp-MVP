@@ -21,12 +21,11 @@ import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import { formatPhoneNumber, PHONE_NUMBER_LENGTH } from '../utils/phone';
 import {
   classifyOtpRequestFailure,
-  formatOtpCooldownToast,
-  formatOtpRequestWindowToast,
   getResendCooldownFromSuccess,
   useOtpCooldown,
 } from '../utils/otpCooldown';
 import { showToast } from '../utils/toast';
+import { showDevOtpAlert } from '../utils/devOtpDiagnostic';
 import { fonts, brand, gradients, radii } from '../utils/designTokens';
 
 const LOGO = require('../../assets/telefonak-app-icon-v5.png');
@@ -51,7 +50,7 @@ export default function LoginScreen() {
     }
 
     if (isCoolingDown) {
-      showToast(formatOtpCooldownToast(secondsLeft));
+      showToast(t('auth.otpCooldownWait').replace('{seconds}', String(secondsLeft)));
       return;
     }
 
@@ -71,19 +70,20 @@ export default function LoginScreen() {
           isSignUp: false,
           cooldownSeconds: cooldown,
         });
-        if (response.data.otp) {
-          Alert.alert(t('auth.otpSent'), `Your OTP is: ${response.data.otp} (Development mode)`);
+        if (__DEV__) {
+          showDevOtpAlert(response.data, t('auth.otpSent'));
         }
       }
     } catch (error) {
       const failure = classifyOtpRequestFailure(error);
       if (failure.kind === 'resend_cooldown') {
         startCooldown(failure.seconds);
-        showToast(formatOtpCooldownToast(failure.seconds));
+        showToast(t('auth.otpCooldownWait').replace('{seconds}', String(failure.seconds)));
         return;
       }
       if (failure.kind === 'request_window') {
-        showToast(formatOtpRequestWindowToast(failure.seconds));
+        const minutes = Math.max(1, Math.ceil((Number(failure.seconds) || 60) / 60));
+        showToast(t('auth.otpRequestWindow').replace('{minutes}', String(minutes)));
         return;
       }
 
@@ -98,7 +98,7 @@ export default function LoginScreen() {
   const buttonLabel = loading
     ? t('auth.sending')
     : isCoolingDown
-      ? `Resend code in ${secondsLeft}s`
+      ? t('auth.resendCodeIn').replace('{seconds}', String(secondsLeft))
       : t('auth.sendOTP');
 
   const goBack = () => {

@@ -6,7 +6,7 @@
     "sdkVersion": "54.0.0",
     "orientation": "portrait",
     "icon": "./assets/telefonak-app-icon-v5.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",

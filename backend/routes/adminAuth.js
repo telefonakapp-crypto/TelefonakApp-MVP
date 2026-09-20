@@ -1,36 +1,17 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
 const pool = require('../config/database');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
 const { toSessionAdmin } = require('../utils/adminAuth');
 const { writeAuditLog } = require('../utils/auditLog');
-const { getAdminJwtSecret, ADMIN_JWT_ISS, ADMIN_JWT_AUD } = require('../config/env');
+const { signAdminToken } = require('../utils/adminToken');
 const { adminLoginLimiter } = require('../middleware/rateLimits');
 
 const router = express.Router();
 
-const ADMIN_TOKEN_TTL = '30d';
 const BCRYPT_ROUNDS = 12;
 const MIN_PASSWORD_LENGTH = 8;
-
-function signAdminToken(admin) {
-  return jwt.sign(
-    {
-      adminId: admin.id,
-      email: admin.email,
-      role: admin.role,
-      typ: 'admin',
-    },
-    getAdminJwtSecret(),
-    {
-      expiresIn: ADMIN_TOKEN_TTL,
-      issuer: ADMIN_JWT_ISS,
-      audience: ADMIN_JWT_AUD,
-    }
-  );
-}
 
 function validationErrorResponse(req, res) {
   const errors = validationResult(req);

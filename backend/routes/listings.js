@@ -614,9 +614,9 @@ router.put('/listings/:id/mark-sold', verifyToken, async (req, res) => {
     const result = await pool.query(
       `UPDATE listings 
        SET status = $1, updated_at = CURRENT_TIMESTAMP 
-       WHERE id = $2 AND status = $3
+       WHERE id = $2 AND user_id = $3 AND status = $4
        RETURNING *`,
-      [LISTING_STATUS.SOLD, id, LISTING_STATUS.APPROVED]
+      [LISTING_STATUS.SOLD, id, userId, LISTING_STATUS.APPROVED]
     );
 
     if (result.rows.length === 0) {
@@ -1082,7 +1082,7 @@ router.put('/listings/:id', verifyToken,
         const client = await pool.connect();
         try {
           await client.query('BEGIN');
-          const snapshot = await freezeCurrentListingRevision(client, parseInt(id, 10));
+          const snapshot = await freezeCurrentListingRevision(client, parseInt(id, 10), userId);
           if (!snapshot) {
             await client.query('ROLLBACK');
             return res.status(404).json({ error: 'Listing not found' });
@@ -1141,13 +1141,14 @@ router.put('/listings/:id', verifyToken,
                  previous_listing_id   = $26,
                  revision_number       = $27,
                  updated_at            = CURRENT_TIMESTAMP
-             WHERE id = $28`,
+             WHERE id = $28 AND user_id = $29`,
             [
               ...listingFieldValues,
               LISTING_STATUS.UPDATED,
               snapshot.id,
               (currentListing.revision_number || 1) + 1,
               id,
+              userId,
             ]
           );
 
@@ -1203,8 +1204,8 @@ router.put('/listings/:id', verifyToken,
                status                = $25,
                resubmitted_at        = CURRENT_TIMESTAMP,
                updated_at            = CURRENT_TIMESTAMP
-           WHERE id = $26`,
-          [...listingFieldValues, nextStatus, id]
+           WHERE id = $26 AND user_id = $27`,
+          [...listingFieldValues, nextStatus, id, userId]
         );
       } else if (isQueueStayEdit) {
         await pool.query(
@@ -1239,8 +1240,8 @@ router.put('/listings/:id', verifyToken,
                moderated_by_admin_id = NULL,
                resubmitted_at        = NULL,
                updated_at            = CURRENT_TIMESTAMP
-           WHERE id = $26`,
-          [...listingFieldValues, nextStatus, id]
+           WHERE id = $26 AND user_id = $27`,
+          [...listingFieldValues, nextStatus, id, userId]
         );
       } else {
         await pool.query(
@@ -1278,8 +1279,8 @@ router.put('/listings/:id', verifyToken,
                moderated_by_admin_id = NULL,
                resubmitted_at        = NULL,
                updated_at            = CURRENT_TIMESTAMP
-           WHERE id = $26`,
-          [...listingFieldValues, nextStatus, id]
+           WHERE id = $26 AND user_id = $27`,
+          [...listingFieldValues, nextStatus, id, userId]
         );
       }
 

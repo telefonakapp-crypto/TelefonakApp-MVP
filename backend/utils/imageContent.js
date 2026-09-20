@@ -9,21 +9,23 @@ const FORMAT_BY_EXT = {
   '.jpg': 'jpeg',
   '.jpeg': 'jpeg',
   '.png': 'png',
+  '.gif': 'gif',
   '.webp': 'webp',
 };
 
 const EXT_BY_FORMAT = {
   jpeg: '.jpg',
   png: '.png',
+  gif: '.gif',
   webp: '.webp',
 };
 
 /**
  * @param {Buffer} buffer
- * @returns {'jpeg'|'png'|'webp'|null}
+ * @returns {'jpeg'|'png'|'gif'|'webp'|null}
  */
 function detectImageFormat(buffer) {
-  if (!Buffer.isBuffer(buffer) || buffer.length < 12) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 3) {
     return null;
   }
 
@@ -32,8 +34,22 @@ function detectImageFormat(buffer) {
     return 'jpeg';
   }
 
+  // GIF87a / GIF89a
+  if (
+    buffer.length >= 6 &&
+    buffer[0] === 0x47 &&
+    buffer[1] === 0x49 &&
+    buffer[2] === 0x46 &&
+    buffer[3] === 0x38 &&
+    (buffer[4] === 0x37 || buffer[4] === 0x39) &&
+    buffer[5] === 0x61
+  ) {
+    return 'gif';
+  }
+
   // PNG: 89 50 4E 47 0D 0A 1A 0A
   if (
+    buffer.length >= 8 &&
     buffer[0] === 0x89 &&
     buffer[1] === 0x50 &&
     buffer[2] === 0x4e &&
@@ -48,6 +64,7 @@ function detectImageFormat(buffer) {
 
   // WebP: RIFF....WEBP
   if (
+    buffer.length >= 12 &&
     buffer[0] === 0x52 &&
     buffer[1] === 0x49 &&
     buffer[2] === 0x46 &&

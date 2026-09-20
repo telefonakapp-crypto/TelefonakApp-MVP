@@ -49,7 +49,10 @@ DB_PORT=5432
 DB_NAME=telefonak
 DB_USER=postgres
 DB_PASSWORD=your_actual_password
-JWT_SECRET=your_super_secret_jwt_key_here_make_it_long_and_random
+JWT_CUSTOMER_SECRET=your_distinct_customer_jwt_secret_here
+JWT_ADMIN_SECRET=your_distinct_admin_jwt_secret_here
+# Twilio is optional for local development (OTP defaults to 1234).
+# Production (NODE_ENV=production) will not start unless these three are valid:
 TWILIO_ACCOUNT_SID=your_twilio_sid
 TWILIO_AUTH_TOKEN=your_twilio_token
 TWILIO_PHONE_NUMBER=your_twilio_number
@@ -154,8 +157,9 @@ In development, the OTP code is returned in the API response for testing. Check 
 
 ## Notes
 
-- OTP expires after 10 minutes
-- JWT tokens expire after 30 days (for authenticated users)
+- OTP expires after 5 minutes in production (see `backend/config/otp.js`)
+- Customer access JWTs default to 15 minutes (refresh sessions 30 days)
+- Admin Web access JWTs default to 8 hours (`ADMIN_ACCESS_TOKEN_TTL`; production max 24h)
 - Phone numbers must be in Jordanian format
 - In development, OTP is shown in response for testing
 

@@ -6,28 +6,38 @@
  *   iOS Simulator:     http://localhost:3000
  *   Android Emulator:  http://10.0.2.2:3000
  *   Physical device:   http://192.168.x.x:3000
- *   Production:        https://api.telefonak.com
+ *   Production:        HTTPS origin via EXPO_PUBLIC_API_URL (required for store builds)
  *
- * When unset, defaults to http://localhost:3000 (existing local simulator behavior).
+ * Development: when unset, defaults to http://localhost:3000.
+ * Production/release: missing, HTTP, localhost, or LAN URLs fail the build/bundle.
+ *
+ * Expo inlines EXPO_PUBLIC_* from `.env` at bundle time, so a CLI override cannot
+ * safely change Android without also changing iOS. On Android development only,
+ * loopback origins are rewritten to the emulator host alias 10.0.2.2 at runtime.
  */
 
-const DEFAULT_API_ORIGIN = 'http://localhost:3000';
+import { Platform } from 'react-native';
+import { resolveApiOrigin } from './apiOriginPolicy';
 
-function normalizeApiOrigin(raw) {
-  let url = (raw || DEFAULT_API_ORIGIN).trim();
-  if (!url) url = DEFAULT_API_ORIGIN;
-  url = url.replace(/\/+$/, '');
-  if (url.endsWith('/api')) {
-    url = url.slice(0, -4);
-  }
-  return url;
+function isDevelopmentRuntime() {
+  if (typeof __DEV__ !== 'undefined') return __DEV__;
+  return process.env.NODE_ENV !== 'production';
 }
 
-/** Server origin, e.g. http://localhost:3000 */
-export const API_ORIGIN = normalizeApiOrigin(process.env.EXPO_PUBLIC_API_URL);
+const isDevelopment = isDevelopmentRuntime();
+
+/** Server origin, e.g. http://localhost:3000 (iOS dev) or https://… (release) */
+export const API_ORIGIN = resolveApiOrigin(process.env.EXPO_PUBLIC_API_URL, {
+  isDevelopment,
+  androidEmulatorRewrite: isDevelopment && Platform.OS === 'android',
+});
 
 /** REST API base, e.g. http://localhost:3000/api */
 export const API_BASE_URL = `${API_ORIGIN}/api`;
+
+if (isDevelopment) {
+  console.log('[apiConfig] API_ORIGIN', API_ORIGIN);
+}
 
 /**
  * Resolve a media/upload URL for Image components.

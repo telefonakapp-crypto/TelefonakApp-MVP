@@ -27,6 +27,7 @@ import {
   useOtpCooldown,
 } from '../utils/otpCooldown';
 import { showToast } from '../utils/toast';
+import { showDevOtpAlert } from '../utils/devOtpDiagnostic';
 import { ignoreIfMaintenance } from '../utils/maintenance';
 
 export default function ChangePhoneScreen() {
@@ -87,8 +88,8 @@ export default function ChangePhoneScreen() {
         cooldownSeconds: cooldown,
       });
 
-      if (response.data?.otp) {
-        Alert.alert(t('auth.otpSent'), `Your OTP is: ${response.data.otp} (Development mode)`);
+      if (__DEV__) {
+        showDevOtpAlert(response.data, t('auth.otpSent'));
       }
     } catch (error) {
       const failure = classifyOtpRequestFailure(error);

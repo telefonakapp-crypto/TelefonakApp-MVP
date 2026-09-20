@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { StatusBar } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -13,7 +14,7 @@ import {
   Inter_500Medium,
   Inter_600SemiBold,
 } from '@expo-google-fonts/inter';
-import { ThemeProvider } from './src/context/ThemeContext';
+import { ThemeProvider, useTheme } from './src/context/ThemeContext';
 import { LanguageProvider, useLanguage } from './src/context/LanguageContext';
 import { FavoritesProvider } from './src/context/FavoritesContext';
 import { NotificationsProvider } from './src/context/NotificationsContext';
@@ -58,10 +59,32 @@ import {
   hydrateContactSettingsCache,
   refreshContactSettings,
 } from './src/utils/contactSettings';
+import { statusBarStyleForRoute } from './src/utils/themeMode';
+import { brand } from './src/utils/designTokens';
 // Side-effect: attach maintenance interceptors to apiClient + default axios.
 import './src/utils/api';
 
 const Stack = createStackNavigator();
+
+function focusedRouteName(state, fallback) {
+  if (!state) return fallback;
+  const route = state.routes[state.index];
+  if (route?.state) return focusedRouteName(route.state, route.name);
+  return route?.name || fallback;
+}
+
+const BRANDED_BLUE_ROUTES = {
+  AuthChoice: true,
+  Login: true,
+  SignUpPhone: true,
+  Register: true,
+};
+
+const BRANDED_LIGHT_ROUTES = {
+  Onboarding: true,
+  OTP: true,
+  Maintenance: true,
+};
 const SPLASH_MIN_MS = 2500;
 
 /**
@@ -195,18 +218,35 @@ export default function App() {
 
 function AppNavigatorWrapper({ initialRoute, registrationToken }) {
   const { isRTL } = useLanguage();
+  const { isDarkMode, colors } = useTheme();
+  const [routeName, setRouteName] = useState(initialRoute);
 
   const defaultScreenOptions = {
     headerShown: false,
     gestureDirection: isRTL ? 'horizontal-inverted' : 'horizontal',
   };
 
+  const barStyle = statusBarStyleForRoute(routeName, isDarkMode);
+  let statusBarBackground = colors.background;
+  if (BRANDED_BLUE_ROUTES[routeName]) {
+    statusBarBackground = brand.primary;
+  } else if (BRANDED_LIGHT_ROUTES[routeName]) {
+    statusBarBackground = '#f9f9f9';
+  }
+
   return (
     <NavigationContainer
       ref={(ref) => {
         setMaintenanceNavigationRef(ref);
       }}
+      onStateChange={(state) => {
+        setRouteName(focusedRouteName(state, initialRoute));
+      }}
     >
+      <StatusBar
+        barStyle={barStyle}
+        backgroundColor={statusBarBackground}
+      />
       <Stack.Navigator
         initialRouteName={initialRoute}
         screenOptions={defaultScreenOptions}

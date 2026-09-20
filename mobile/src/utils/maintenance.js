@@ -24,6 +24,31 @@ export function setMaintenanceNavigationRef(ref) {
   navigationRef = ref;
 }
 
+const AUTH_ENTRY_ROUTES = {
+  AuthChoice: true,
+  Login: true,
+  SignUpPhone: true,
+  OTP: true,
+  Register: true,
+  Onboarding: true,
+};
+
+/**
+ * After the client confirms the session is gone, leave authenticated screens.
+ * No-op on auth entry routes and before the navigator is ready.
+ */
+export function resetToAuthChoice() {
+  if (!navigationRef?.isReady?.()) return;
+  const current = navigationRef.getCurrentRoute?.()?.name;
+  if (AUTH_ENTRY_ROUTES[current]) return;
+  navigationRef.dispatch(
+    CommonActions.reset({
+      index: 0,
+      routes: [{ name: 'AuthChoice' }],
+    })
+  );
+}
+
 export function setMaintenanceToastDismisser(fn) {
   dismissToastsImpl = typeof fn === 'function' ? fn : null;
 }

@@ -1,10 +1,12 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   Image,
+  Animated,
+  Easing,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
@@ -19,6 +21,36 @@ const LOGO = require('../../assets/telefonak-app-icon-v5.png');
 export default function AuthChoiceScreen() {
   const navigation = useNavigation();
   const { t, isRTL, language, changeLanguage } = useLanguage();
+  const flip = useRef(new Animated.Value(0)).current;
+  const flipBusyRef = useRef(false);
+
+  const handleSelectLanguage = (nextLanguage) => {
+    if (nextLanguage === language || flipBusyRef.current) return;
+    flipBusyRef.current = true;
+    const dir = nextLanguage === 'ar' ? 1 : -1;
+    Animated.timing(flip, {
+      toValue: dir,
+      duration: 160,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) {
+        flip.setValue(0);
+        flipBusyRef.current = false;
+        return;
+      }
+      changeLanguage(nextLanguage);
+      flip.setValue(-dir);
+      Animated.timing(flip, {
+        toValue: 0,
+        duration: 200,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start(() => {
+        flipBusyRef.current = false;
+      });
+    });
+  };
 
   const handleLogin = () => {
     navigation.navigate('Login');
@@ -28,6 +60,15 @@ export default function AuthChoiceScreen() {
     navigation.navigate('SignUpPhone');
   };
 
+  const flipRotateY = flip.interpolate({
+    inputRange: [-1, 0, 1],
+    outputRange: ['-90deg', '0deg', '90deg'],
+  });
+  const flipOpacity = flip.interpolate({
+    inputRange: [-1, -0.2, 0, 0.2, 1],
+    outputRange: [0.35, 1, 1, 1, 0.35],
+  });
+
   return (
     <LinearGradient
       colors={gradients.primary}
@@ -35,9 +76,9 @@ export default function AuthChoiceScreen() {
     >
       <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
         <View style={styles.languageBar} pointerEvents="box-none">
-          <View style={styles.languageTrack}>
+          <View style={styles.languageTrack} pointerEvents="auto">
             <TouchableOpacity
-              onPress={() => changeLanguage('en')}
+              onPress={() => handleSelectLanguage('en')}
               accessibilityRole="button"
               accessibilityState={{ selected: language === 'en' }}
               style={[
@@ -56,7 +97,7 @@ export default function AuthChoiceScreen() {
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              onPress={() => changeLanguage('ar')}
+              onPress={() => handleSelectLanguage('ar')}
               accessibilityRole="button"
               accessibilityState={{ selected: language === 'ar' }}
               style={[
@@ -77,63 +118,75 @@ export default function AuthChoiceScreen() {
           </View>
         </View>
 
-        <View style={styles.upper}>
-          <Image
-            source={LOGO}
-            style={styles.logoImage}
-            resizeMode="contain"
-            accessibilityLabel="Telefonak"
-          />
-        </View>
+        <Animated.View
+          collapsable={false}
+          pointerEvents="box-none"
+          style={[
+            styles.flipSurface,
+            {
+              opacity: flipOpacity,
+              transform: [{ perspective: 1000 }, { rotateY: flipRotateY }],
+            },
+          ]}
+        >
+          <View style={styles.upper} pointerEvents="none">
+            <Image
+              source={LOGO}
+              style={styles.logoImage}
+              resizeMode="contain"
+              accessibilityLabel="Telefonak"
+            />
+          </View>
 
-        <View style={styles.lower}>
-          <View style={styles.buttonsContainer}>
-            <TouchableOpacity
-              style={styles.loginButton}
-              onPress={handleLogin}
-              activeOpacity={0.8}
-            >
-              <LinearGradient
-                colors={['rgba(255, 255, 255, 0.95)', 'rgba(255, 255, 255, 0.9)']}
-                style={[styles.buttonGradient, getFlexDirection(isRTL, 'row')]}
+          <View style={styles.lower}>
+            <View style={styles.buttonsContainer}>
+              <TouchableOpacity
+                style={styles.loginButton}
+                onPress={handleLogin}
+                activeOpacity={0.8}
               >
-                <Ionicons
-                  name="log-in-outline"
-                  size={24}
-                  color={brand.primary}
-                  style={[
-                    styles.buttonIcon,
-                    isRTL ? { marginRight: 0, marginLeft: 12 } : null,
-                  ]}
-                />
-                <Text style={styles.loginButtonText}>{t('welcome.haveAccount')}</Text>
-              </LinearGradient>
-            </TouchableOpacity>
+                <LinearGradient
+                  colors={['rgba(255, 255, 255, 0.95)', 'rgba(255, 255, 255, 0.9)']}
+                  style={[styles.buttonGradient, getFlexDirection(isRTL, 'row')]}
+                >
+                  <Ionicons
+                    name="log-in-outline"
+                    size={24}
+                    color={brand.primary}
+                    style={[
+                      styles.buttonIcon,
+                      isRTL ? { marginRight: 0, marginLeft: 12 } : null,
+                    ]}
+                  />
+                  <Text style={styles.loginButtonText}>{t('welcome.haveAccount')}</Text>
+                </LinearGradient>
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.signupButton}
-              onPress={handleSignUp}
-              activeOpacity={0.8}
-            >
-              <View style={[styles.signupButtonContent, getFlexDirection(isRTL, 'row')]}>
-                <Ionicons
-                  name="person-add-outline"
-                  size={24}
-                  color="#fff"
-                  style={[
-                    styles.buttonIcon,
-                    isRTL ? { marginRight: 0, marginLeft: 12 } : null,
-                  ]}
-                />
-                <Text style={styles.signupButtonText}>{t('welcome.signUp')}</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
+              <TouchableOpacity
+                style={styles.signupButton}
+                onPress={handleSignUp}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.signupButtonContent, getFlexDirection(isRTL, 'row')]}>
+                  <Ionicons
+                    name="person-add-outline"
+                    size={24}
+                    color="#fff"
+                    style={[
+                      styles.buttonIcon,
+                      isRTL ? { marginRight: 0, marginLeft: 12 } : null,
+                    ]}
+                  />
+                  <Text style={styles.signupButtonText}>{t('welcome.signUp')}</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
 
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>{t('welcome.terms')}</Text>
+            <View style={styles.footer}>
+              <Text style={styles.footerText}>{t('welcome.terms')}</Text>
+            </View>
           </View>
-        </View>
+        </Animated.View>
       </SafeAreaView>
     </LinearGradient>
   );
@@ -146,11 +199,17 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
   },
+  flipSurface: {
+    flex: 1,
+    backfaceVisibility: 'hidden',
+  },
   languageBar: {
     alignItems: 'flex-end',
     paddingTop: 6,
     paddingRight: 16,
     transform: [{ translateY: 30 }],
+    zIndex: 2,
+    elevation: 3,
   },
   languageTrack: {
     flexDirection: 'row',

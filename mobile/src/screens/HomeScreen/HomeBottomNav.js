@@ -319,16 +319,5 @@ const styles = StyleSheet.create({
     borderWidth: 4,
     justifyContent: 'center',
     alignItems: 'center',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#1976D2',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.28,
-        shadowRadius: 8,
-      },
-      android: {
-        elevation: 8,
-      },
-    }),
   },
 });

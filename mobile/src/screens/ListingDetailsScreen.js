@@ -42,6 +42,7 @@ import {
   EmptyState,
   OwnerActionRow,
   ownerActionListStyle,
+  StatusBadge,
 } from '../components/ui';
 import { isSmartwatchListing } from '../utils/listingCatalogForm';
 import { formatListingLocation } from '../utils/marketplaceFilters';
@@ -807,39 +808,94 @@ export default function ListingDetailsScreen() {
                 {t('listingDetails.insights')}
               </Text>
               <View style={[styles.insightsGrid, getFlexDirection(isRTL, 'row')]}>
-                {[
-                  { value: listing.views ?? '—', label: t('listingDetails.viewsLabel') },
-                  {
-                    value: listing.favorites_count ?? '—',
-                    label: t('listingDetails.favoritesLabel'),
-                  },
-                  {
-                    value: listing.offers_count ?? '—',
-                    label: t('listingDetails.offersLabel'),
-                  },
-                  {
-                    value: getStatusLabel(listing.status),
-                    label: t('listingDetails.statusLabel'),
-                  },
-                ].map((item) => (
+                <View
+                  style={[
+                    styles.insightTile,
+                    { backgroundColor: colors.surfaceContainerLow },
+                  ]}
+                >
+                  <Text
+                    style={[styles.insightValue, { color: colors.text }]}
+                    numberOfLines={1}
+                  >
+                    {listing.views ?? '—'}
+                  </Text>
+                  <Text style={[styles.insightLabel, { color: colors.textSecondary }]}>
+                    {t('listingDetails.viewsLabel')}
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.insightTile,
+                    { backgroundColor: colors.surfaceContainerLow },
+                  ]}
+                >
+                  <Text
+                    style={[styles.insightValue, { color: colors.text }]}
+                    numberOfLines={1}
+                  >
+                    {listing.favorites_count ?? '—'}
+                  </Text>
+                  <Text style={[styles.insightLabel, { color: colors.textSecondary }]}>
+                    {t('listingDetails.favoritesLabel')}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[
+                    styles.insightTile,
+                    { backgroundColor: colors.surfaceContainerLow },
+                  ]}
+                  onPress={() =>
+                    navigation.push('Offers', {
+                      initialSegment: 'received',
+                      listingId,
+                    })
+                  }
+                  activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('listingDetails.offersLabel')}
+                >
                   <View
-                    key={item.label}
-                    style={[
-                      styles.insightTile,
-                      { backgroundColor: colors.surfaceContainerLow },
-                    ]}
+                    style={[styles.insightValueRow, getFlexDirection(isRTL, 'row')]}
                   >
                     <Text
-                      style={[styles.insightValue, { color: colors.text }]}
+                      style={[
+                        styles.insightValue,
+                        styles.insightValueFlex,
+                        { color: colors.text },
+                      ]}
                       numberOfLines={1}
                     >
-                      {item.value}
+                      {listing.offers_count ?? '—'}
                     </Text>
-                    <Text style={[styles.insightLabel, { color: colors.textSecondary }]}>
-                      {item.label}
-                    </Text>
+                    <Ionicons
+                      name={isRTL ? 'chevron-back' : 'chevron-forward'}
+                      size={16}
+                      color={colors.textMuted}
+                    />
                   </View>
-                ))}
+                  <Text style={[styles.insightLabel, { color: colors.textSecondary }]}>
+                    {t('listingDetails.offersLabel')}
+                  </Text>
+                </TouchableOpacity>
+                <View
+                  style={[
+                    styles.insightTile,
+                    { backgroundColor: colors.surfaceContainerLow },
+                  ]}
+                >
+                  <View style={styles.insightStatusValue}>
+                    <StatusBadge
+                      status={listing.status}
+                      label={getStatusLabel(listing.status)}
+                      style={styles.insightStatusBadge}
+                      textStyle={styles.insightStatusText}
+                    />
+                  </View>
+                  <Text style={[styles.insightLabel, { color: colors.textSecondary }]}>
+                    {t('listingDetails.statusLabel')}
+                  </Text>
+                </View>
               </View>
             </Card>
           ) : null}
@@ -1601,6 +1657,29 @@ const styles = StyleSheet.create({
   insightValue: {
     fontFamily: fonts.headline,
     fontSize: 18,
+  },
+  insightValueRow: {
+    alignItems: 'center',
+    minHeight: 22,
+    gap: space[1],
+  },
+  insightValueFlex: {
+    flex: 1,
+    flexShrink: 1,
+  },
+  insightStatusValue: {
+    minHeight: 22,
+    justifyContent: 'center',
+  },
+  insightStatusBadge: {
+    maxWidth: '100%',
+    paddingHorizontal: space[3],
+    paddingVertical: 4,
+    borderRadius: radii.full,
+  },
+  insightStatusText: {
+    fontSize: 12,
+    lineHeight: 16,
   },
   insightLabel: {
     fontFamily: fonts.label,

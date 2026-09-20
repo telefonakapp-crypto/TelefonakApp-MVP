@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useRoute } from '@react-navigation/native';
 import apiClient, { resolveMediaUrl } from '../utils/api';
 import { getApiErrorMessage, logApiError } from '../utils/apiError';
 import { useTheme } from '../context/ThemeContext';
@@ -22,6 +22,7 @@ import OfferStatusBadge from '../components/OfferStatusBadge';
 import { ignoreIfMaintenance } from '../utils/maintenance';
 import { fonts, radii, space } from '../utils/designTokens';
 import { getListingDisplayName } from '../utils/listingDisplayName';
+import { filterReceivedOffersByListingId } from '../utils/receivedOffersListingFilter';
 import {
   Button,
   Card,
@@ -45,6 +46,8 @@ function isUnreadReceivedOffer(offer) {
 
 export default function ReceivedOffersScreen({ embedded = false }) {
   const navigation = useNavigation();
+  const route = useRoute();
+  const listingIdFilter = route.params?.listingId;
   const { colors } = useTheme();
   const { t, isRTL } = useLanguage();
   const {
@@ -326,7 +329,7 @@ export default function ReceivedOffersScreen({ embedded = false }) {
     />
   ) : (
     <FlatList
-      data={offers}
+      data={filterReceivedOffersByListingId(offers, listingIdFilter)}
       keyExtractor={(item) => String(item.id)}
       renderItem={renderItem}
       contentContainerStyle={styles.listContent}

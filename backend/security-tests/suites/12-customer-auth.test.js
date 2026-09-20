@@ -81,8 +81,8 @@ describe('12 — Customer auth hardening (Phase 3)', () => {
   });
 
   it('customer JWT signed with admin secret is rejected on customer routes', async () => {
-    // Cross-signing must fail when secrets differ; when falling back to shared
-    // JWT_SECRET in local/dev, iss/aud still constrain admin-shaped misuse.
+    // Cross-signing must fail when secrets differ; iss/aud also constrain
+    // admin-shaped tokens if a local/dev fallback still shares JWT_SECRET.
     const token = jwt.sign(
       { userId: fx.owner.id, phoneNumber: fx.owner.phone_number, typ: 'access' },
       getAdminJwtSecret(),

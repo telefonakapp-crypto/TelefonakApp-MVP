@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,6 +9,8 @@ import {
   Alert,
   ActivityIndicator,
   Platform,
+  Animated,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -63,6 +65,7 @@ import {
 } from '../../components/ui';
 import CreateListingHeader from './CreateListingHeader';
 import CreateListingImages from './CreateListingImages';
+import { STEP_TRANSITION_SPRING, stepEnterTranslateX } from './stepTransition';
 
 const TOTAL_STEPS = 3;
 
@@ -136,6 +139,34 @@ export default function CreateListingScreen() {
   const [step, setStep] = useState(1);
   const [activeSheet, setActiveSheet] = useState(null);
   const prefillActiveRef = useRef(false);
+  const { width: windowWidth } = useWindowDimensions();
+  const stepTranslateX = useRef(new Animated.Value(0)).current;
+  const stepAnimRef = useRef(null);
+  const prevStepRef = useRef(step);
+
+  useLayoutEffect(() => {
+    const previousStep = prevStepRef.current;
+    if (previousStep === step) return;
+    prevStepRef.current = step;
+    const fromX = stepEnterTranslateX(step > previousStep, isRTL, windowWidth);
+    if (stepAnimRef.current) {
+      stepAnimRef.current.stop();
+    }
+    stepTranslateX.setValue(fromX);
+    const animation = Animated.spring(stepTranslateX, {
+      toValue: 0,
+      ...STEP_TRANSITION_SPRING,
+    });
+    stepAnimRef.current = animation;
+    animation.start(() => {
+      if (stepAnimRef.current === animation) {
+        stepAnimRef.current = null;
+      }
+    });
+    return () => {
+      animation.stop();
+    };
+  }, [step, isRTL, windowWidth, stepTranslateX]);
 
   useEffect(() => {
     fetchData();
@@ -609,7 +640,7 @@ export default function CreateListingScreen() {
     if (!validateStep(step)) return;
     setStep((s) => Math.min(TOTAL_STEPS, s + 1));
     requestAnimationFrame(() =>
-      scrollViewRef.current?.scrollTo({ y: 0, animated: true })
+      scrollViewRef.current?.scrollTo({ y: 0, animated: false })
     );
   };
 
@@ -620,7 +651,7 @@ export default function CreateListingScreen() {
     }
     setStep((s) => s - 1);
     requestAnimationFrame(() =>
-      scrollViewRef.current?.scrollTo({ y: 0, animated: true })
+      scrollViewRef.current?.scrollTo({ y: 0, animated: false })
     );
   };
 
@@ -1030,13 +1061,17 @@ export default function CreateListingScreen() {
         onBack={handleBackStep}
       />
 
-      <ScrollView
-        ref={scrollViewRef}
-        style={styles.content}
-        contentContainerStyle={styles.contentContainer}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
+      <View style={styles.stepViewport}>
+        <Animated.View
+          style={[styles.content, { transform: [{ translateX: stepTranslateX }] }]}
+        >
+          <ScrollView
+            ref={scrollViewRef}
+            style={styles.content}
+            contentContainerStyle={styles.contentContainer}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
         <Text style={[styles.heroTitle, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
           {stepTitle}
         </Text>
@@ -1502,7 +1537,9 @@ export default function CreateListingScreen() {
             />
           </View>
         )}
-      </ScrollView>
+          </ScrollView>
+        </Animated.View>
+      </View>
 
       <View style={[styles.footer, { backgroundColor: colors.background }]}>
         {step < TOTAL_STEPS ? (
@@ -1659,6 +1696,7 @@ export default function CreateListingScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  stepViewport: { flex: 1, overflow: 'hidden' },
   content: { flex: 1 },
   contentContainer: {
     paddingHorizontal: space[5],

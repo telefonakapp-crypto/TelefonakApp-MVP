@@ -19,7 +19,8 @@ import { useOffersUnread } from '../context/OffersUnreadContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import apiClient from '../utils/api';
 import { ignoreIfMaintenance } from '../utils/maintenance';
-import { clearAuthSession, getRefreshToken } from '../utils/authSession';
+import { logApiError } from '../utils/apiError';
+import { clearAuthSession, getAuthToken, getRefreshToken } from '../utils/authSession';
 import { deactivateDevicePushToken } from '../utils/pushRegistration';
 import { fonts, radii, space, ambientElevation } from '../utils/designTokens';
 import { EmptyState, IconButton, ProfileScreenSkeleton } from '../components/ui';
@@ -94,15 +95,31 @@ export default function ProfileScreen() {
       setLoading(true);
       setLoadError(false);
       const response = await apiClient.get('/user/profile');
-      setUser(response.data.user);
+      if (response.data?.user) {
+        setUser(response.data.user);
+      } else {
+        setLoadError(true);
+      }
     } catch (error) {
       if (ignoreIfMaintenance(error)) return;
-      console.error('Error fetching profile:', error);
+      logApiError('ProfileScreen.fetchUserProfile', error);
+      const status = error?.response?.status;
+      if (status === 401) {
+        const access = await getAuthToken();
+        const refresh = await getRefreshToken();
+        if (!access && !refresh) {
+          navigation.reset({
+            index: 0,
+            routes: [{ name: 'AuthChoice' }],
+          });
+          return;
+        }
+      }
       setLoadError(true);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [navigation]);
 
   useFocusEffect(
     useCallback(() => {

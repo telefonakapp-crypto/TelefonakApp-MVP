@@ -67,7 +67,7 @@ async function recordListingModerationEvent(clientOrPool, event) {
  * Freeze the current listing row as an immutable revision snapshot.
  * The original id stays the live tip; the returned row is the previous version.
  */
-async function freezeCurrentListingRevision(client, listingId) {
+async function freezeCurrentListingRevision(client, listingId, userId) {
   const result = await client.query(
     `INSERT INTO listings (
        user_id, model_id, storage_id, color_id, model_storage_id, model_color_id,
@@ -89,9 +89,9 @@ async function freezeCurrentListingRevision(client, listingId) {
        category_id, listing_source, custom_brand_name, custom_model_name, custom_storage,
        custom_color_name, custom_sim_configuration, custom_case_size, custom_connectivity
      FROM listings
-     WHERE id = $1
+     WHERE id = $1 AND user_id = $2
      RETURNING *`,
-    [listingId]
+    [listingId, userId]
   );
 
   return result.rows[0] || null;

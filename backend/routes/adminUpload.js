@@ -6,6 +6,7 @@ const { uploadLimiter } = require('../middleware/rateLimits');
 const {
   adminImageUpload,
   respondWithUploadedImage,
+  handleAdminImageUploadErrors,
 } = require('../utils/adminImageUpload');
 
 const router = express.Router();
@@ -20,8 +21,12 @@ router.post(
   uploadLimiter,
   verifyAdminAuth,
   requirePermission(PERMISSIONS.UPLOAD_WRITE),
-  adminImageUpload.single('image'),
-  respondWithUploadedImage
+  (req, res) => {
+    adminImageUpload.single('image')(req, res, (err) => {
+      if (handleAdminImageUploadErrors(err, req, res)) return;
+      return respondWithUploadedImage(req, res);
+    });
+  }
 );
 
 module.exports = router;

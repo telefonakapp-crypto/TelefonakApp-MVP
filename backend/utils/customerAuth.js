@@ -76,33 +76,21 @@ function signRegistrationToken(phoneNumber) {
 
 /**
  * Verify a customer JWT (access or registration).
- * Accepts legacy tokens signed with the same secret that omit iss/aud/typ
- * so pre-Phase-3 sessions can finish their natural lifetime.
+ * Issuer and audience are mandatory — no legacy fallback.
  */
 function verifyCustomerToken(token) {
-  const secret = getCustomerJwtSecret();
-  try {
-    return jwt.verify(token, secret, {
-      issuer: CUSTOMER_JWT_ISS,
-      audience: CUSTOMER_JWT_AUD,
-    });
-  } catch (err) {
-    // Legacy tokens (no iss/aud) — verify without claim checks once.
-    if (err.name === 'JsonWebTokenError') {
-      const decoded = jwt.verify(token, secret);
-      if (decoded.adminId) {
-        throw err;
-      }
-      if (decoded.iss && decoded.iss !== CUSTOMER_JWT_ISS) {
-        throw err;
-      }
-      if (decoded.aud && decoded.aud !== CUSTOMER_JWT_AUD) {
-        throw err;
-      }
-      return decoded;
-    }
-    throw err;
+  const decoded = jwt.verify(token, getCustomerJwtSecret(), {
+    issuer: CUSTOMER_JWT_ISS,
+    audience: CUSTOMER_JWT_AUD,
+    algorithms: ['HS256'],
+  });
+  if (decoded.adminId || decoded.typ === 'admin') {
+    throw new jwt.JsonWebTokenError('Invalid customer token');
   }
+  if (decoded.typ !== 'access' && decoded.typ !== 'registration') {
+    throw new jwt.JsonWebTokenError('Invalid customer token');
+  }
+  return decoded;
 }
 
 async function createRefreshSession(userId, { userAgent = null, ip = null } = {}) {

@@ -20,12 +20,13 @@ import { classifyAuthToken, clearAuthSession, getAuthToken } from '../utils/auth
 import { formatPhoneNumber, PHONE_NUMBER_LENGTH } from '../utils/phone';
 import {
   classifyOtpRequestFailure,
-  formatOtpCooldownToast,
-  formatOtpRequestWindowToast,
   getResendCooldownFromSuccess,
   useOtpCooldown,
 } from '../utils/otpCooldown';
 import { showToast } from '../utils/toast';
+import { showDevOtpAlert } from '../utils/devOtpDiagnostic';
+import { useLanguage } from '../context/LanguageContext';
+import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import { fonts, brand, gradients, radii } from '../utils/designTokens';
 
 const LOGO = require('../../assets/telefonak-app-icon-v5.png');
@@ -34,6 +35,7 @@ export default function SignUpPhoneScreen() {
   const [phoneNumber, setPhoneNumber] = useState('');
   const [loading, setLoading] = useState(false);
   const navigation = useNavigation();
+  const { t, isRTL } = useLanguage();
   const {
     secondsLeft,
     isCoolingDown,
@@ -55,12 +57,12 @@ export default function SignUpPhoneScreen() {
 
   const handleRequestOTP = async () => {
     if (!phoneNumber || phoneNumber.length !== PHONE_NUMBER_LENGTH) {
-      Alert.alert('Error', 'Please enter a valid Jordanian phone number');
+      Alert.alert(t('common.error'), t('auth.invalidPhoneNumber'));
       return;
     }
 
     if (isCoolingDown) {
-      showToast(formatOtpCooldownToast(secondsLeft));
+      showToast(t('auth.otpCooldownWait').replace('{seconds}', String(secondsLeft)));
       return;
     }
 
@@ -80,24 +82,25 @@ export default function SignUpPhoneScreen() {
           isSignUp: true,
           cooldownSeconds: cooldown,
         });
-        if (response.data.otp) {
-          Alert.alert('OTP Sent', `Your OTP is: ${response.data.otp} (Development mode)`);
+        if (__DEV__) {
+          showDevOtpAlert(response.data, t('auth.otpSent'));
         }
       }
     } catch (error) {
       const failure = classifyOtpRequestFailure(error);
       if (failure.kind === 'resend_cooldown') {
         startCooldown(failure.seconds);
-        showToast(formatOtpCooldownToast(failure.seconds));
+        showToast(t('auth.otpCooldownWait').replace('{seconds}', String(failure.seconds)));
         return;
       }
       if (failure.kind === 'request_window') {
-        showToast(formatOtpRequestWindowToast(failure.seconds));
+        const minutes = Math.max(1, Math.ceil((Number(failure.seconds) || 60) / 60));
+        showToast(t('auth.otpRequestWindow').replace('{minutes}', String(minutes)));
         return;
       }
 
       logApiError('SignUpPhoneScreen.requestOTP', error);
-      showToast(getApiErrorMessage(error, 'Failed to send OTP. Please try again.'));
+      showToast(getApiErrorMessage(error, t('auth.failedToSendOTP')));
     } finally {
       endRequest();
       setLoading(false);
@@ -105,10 +108,10 @@ export default function SignUpPhoneScreen() {
   };
 
   const buttonLabel = loading
-    ? 'Sending...'
+    ? t('auth.sending')
     : isCoolingDown
-      ? `Resend code in ${secondsLeft}s`
-      : 'Send OTP';
+      ? t('auth.resendCodeIn').replace('{seconds}', String(secondsLeft))
+      : t('auth.sendOTP');
 
   const goBack = () => {
     if (navigation.canGoBack()) {
@@ -125,8 +128,13 @@ export default function SignUpPhoneScreen() {
           onPress={goBack}
           style={styles.backButton}
           accessibilityRole="button"
+          accessibilityLabel={t('common.back')}
         >
-          <Ionicons name="arrow-back" size={24} color="#ffffff" />
+          <Ionicons
+            name={isRTL ? 'arrow-forward' : 'arrow-back'}
+            size={24}
+            color="#ffffff"
+          />
         </TouchableOpacity>
       </SafeAreaView>
       <KeyboardAvoidingView
@@ -135,15 +143,17 @@ export default function SignUpPhoneScreen() {
       >
         <View style={styles.content}>
           <Image source={LOGO} style={styles.logo} resizeMode="contain" accessibilityLabel="Telefonak" />
-          <Text style={styles.title}>Create Account</Text>
-          <Text style={styles.subtitle}>Enter your phone number to get started</Text>
+          <Text style={[styles.title, getTextAlign(isRTL, 'center')]}>{t('auth.createAccount')}</Text>
+          <Text style={[styles.subtitle, getTextAlign(isRTL, 'center')]}>
+            {t('auth.enterPhoneToGetStarted')}
+          </Text>
 
           <View style={styles.inputContainer}>
-            <Text style={styles.label}>Phone Number</Text>
-            <View style={styles.phoneInputWrapper}>
-              <Text style={styles.countryCode}>+962</Text>
+            <Text style={[styles.label, getTextAlign(isRTL, 'auto')]}>{t('auth.phoneNumber')}</Text>
+            <View style={[styles.phoneInputWrapper, getFlexDirection(isRTL, 'row')]}>
+              <Text style={[styles.countryCode, { marginRight: isRTL ? 0 : 10, marginLeft: isRTL ? 10 : 0 }]}>+962</Text>
               <TextInput
-                style={styles.input}
+                style={[styles.input, getTextAlign(isRTL, 'left')]}
                 placeholder="7XXXXXXXX"
                 placeholderTextColor="#999"
                 value={phoneNumber}
@@ -164,8 +174,8 @@ export default function SignUpPhoneScreen() {
             <Text style={styles.buttonText}>{buttonLabel}</Text>
           </TouchableOpacity>
 
-          <Text style={styles.terms}>
-            By continuing, you agree to our Terms of Service and Privacy Policy
+          <Text style={[styles.terms, getTextAlign(isRTL, 'center')]}>
+            {t('auth.termsAgreement')}
           </Text>
         </View>
       </KeyboardAvoidingView>
@@ -240,7 +250,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.labelBold,
     fontSize: 16,
     color: brand.onSurface,
-    marginRight: 10,
   },
   input: {
     flex: 1,

@@ -21,6 +21,7 @@ import {
   formatNotificationTime,
   localizeNotification,
 } from '../utils/notificationDisplay';
+import { resolveNotificationDestination } from '../utils/notificationNavigation';
 
 const PAGE_SIZE = 20;
 
@@ -302,10 +303,15 @@ export default function NotificationsScreen() {
       markAsRead(item.id);
     }
 
-    // A hard-deleted listing leaves related_listing_id NULL, so there is nothing to open.
-    if (item.related_listing_id) {
-      navigation.navigate('ListingDetails', { listingId: item.related_listing_id });
+    const destination = resolveNotificationDestination(item);
+    if (!destination) return;
+
+    if (destination.method === 'push' && typeof navigation.push === 'function') {
+      navigation.push(destination.name, destination.params);
+      return;
     }
+
+    navigation.navigate(destination.name, destination.params);
   };
 
   const dateLocale = getDateLocale(language);

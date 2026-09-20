@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { CUSTOMER_USER_COLUMNS_SQL } = require('./userColumns');
 
 /**
  * Allowed self-serve "Delete Account" reasons (stored as deactivation_reason).
@@ -184,7 +185,7 @@ async function reactivateUser(client, {
          pending_phone_expires_at = NULL,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = $7
-     RETURNING *`,
+     RETURNING ${CUSTOMER_USER_COLUMNS_SQL}`,
     [firstName, lastName, gender, email, dateOfBirth, city, userId]
   );
   return result.rows[0] || null;

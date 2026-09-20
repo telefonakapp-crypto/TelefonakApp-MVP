@@ -11,7 +11,24 @@ const apiClient = axios.create({
   },
 });
 
+// Refresh must not share interceptors / AbortSignals with in-flight GETs.
+// Android OkHttp cancels a POST that reuses the same AbortSignal as a just-completed GET.
+const refreshClient = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
 let refreshInFlight = null;
+
+function leaveAuthenticatedSession() {
+  try {
+    getMaintenanceHelpers().resetToAuthChoice?.();
+  } catch {
+    // Navigator may not be mounted yet (cold start).
+  }
+}
 
 async function refreshAccessToken() {
   if (refreshInFlight) return refreshInFlight;
@@ -23,8 +40,8 @@ async function refreshAccessToken() {
     }
 
     try {
-      const response = await axios.post(
-        `${API_BASE_URL}/auth/refresh`,
+      const response = await refreshClient.post(
+        '/auth/refresh',
         { refresh_token: refreshToken },
         { headers: { 'Content-Type': 'application/json' } }
       );
@@ -32,6 +49,7 @@ async function refreshAccessToken() {
       const nextRefresh = response.data?.refresh_token;
       if (!nextAccess || !nextRefresh) {
         await AuthSession.clearAuthSession();
+        leaveAuthenticatedSession();
         return null;
       }
       await AuthSession.setAuthSession(response.data);
@@ -39,6 +57,7 @@ async function refreshAccessToken() {
     } catch (error) {
       if (shouldClearAuthOnRefreshFailure(error)) {
         await AuthSession.clearAuthSession();
+        leaveAuthenticatedSession();
       } else if (typeof __DEV__ !== 'undefined' && __DEV__) {
         const status = error?.response?.status;
         console.log(
@@ -58,6 +77,37 @@ async function refreshAccessToken() {
 function getMaintenanceHelpers() {
   // Lazy require avoids a circular import with maintenance helpers.
   return require('./maintenance');
+}
+
+/**
+ * Give every request its own AbortController. Reusing one signal across
+ * requests is cancelled by Android after the first fetch completes.
+ * Maintenance still aborts in-flight work via the shared maintenance signal.
+ */
+function attachPerRequestAbortSignal(config, maintenanceSignal) {
+  const requestController = new AbortController();
+  const callerSignal = config.signal;
+
+  const onAbort = () => {
+    try {
+      requestController.abort();
+    } catch {
+      // ignore
+    }
+  };
+
+  if (callerSignal?.aborted || maintenanceSignal?.aborted) {
+    requestController.abort();
+  } else {
+    if (callerSignal && typeof callerSignal.addEventListener === 'function') {
+      callerSignal.addEventListener('abort', onAbort, { once: true });
+    }
+    if (maintenanceSignal && typeof maintenanceSignal.addEventListener === 'function') {
+      maintenanceSignal.addEventListener('abort', onAbort, { once: true });
+    }
+  }
+
+  config.signal = requestController.signal;
 }
 
 /**
@@ -85,25 +135,7 @@ function attachMaintenanceInterceptors(client) {
       if (!exempt) {
         const maintenanceSignal = getMaintenanceAbortSignal();
         if (maintenanceSignal) {
-          if (config.signal) {
-            const controller = new AbortController();
-            const onAbort = () => {
-              try {
-                controller.abort();
-              } catch {
-                // ignore
-              }
-            };
-            if (config.signal.aborted || maintenanceSignal.aborted) {
-              controller.abort();
-            } else {
-              config.signal.addEventListener('abort', onAbort, { once: true });
-              maintenanceSignal.addEventListener('abort', onAbort, { once: true });
-            }
-            config.signal = controller.signal;
-          } else {
-            config.signal = maintenanceSignal;
-          }
+          attachPerRequestAbortSignal(config, maintenanceSignal);
         }
       }
 

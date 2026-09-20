@@ -12,6 +12,7 @@ const {
   deactivateUser,
   reactivateUser,
 } = require('../utils/deactivateUser');
+const { CUSTOMER_USER_COLUMNS_SQL } = require('../utils/userColumns');
 
 async function issueUserTokenResponse(user, req) {
   return issueCustomerSession(user, {
@@ -48,7 +49,7 @@ router.post('/register', verifyToken,
       await client.query('BEGIN');
 
       const existingUser = await client.query(
-        'SELECT * FROM users WHERE phone_number = $1 FOR UPDATE',
+        'SELECT id, is_active FROM users WHERE phone_number = $1 FOR UPDATE',
         [phoneNumber]
       );
 
@@ -76,7 +77,7 @@ router.post('/register', verifyToken,
              SET first_name = $1, last_name = $2, gender = $3, email = $4,
                  date_of_birth = $5, city = $6, is_verified = TRUE, updated_at = CURRENT_TIMESTAMP
              WHERE phone_number = $7
-             RETURNING *`,
+             RETURNING ${CUSTOMER_USER_COLUMNS_SQL}`,
             [first_name, last_name, gender, email, date_of_birth, city, phoneNumber]
           );
           user = result.rows[0];
@@ -86,7 +87,7 @@ router.post('/register', verifyToken,
         const result = await client.query(
           `INSERT INTO users (phone_number, first_name, last_name, gender, email, date_of_birth, city, is_verified)
            VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE)
-           RETURNING *`,
+           RETURNING ${CUSTOMER_USER_COLUMNS_SQL}`,
           [phoneNumber, first_name, last_name, gender, email, date_of_birth, city]
         );
         user = result.rows[0];
@@ -114,7 +115,10 @@ router.post('/register', verifyToken,
 // Get user profile
 router.get('/profile', verifyToken.requireUserId, async (req, res) => {
   try {
-    const result = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.userId]);
+    const result = await pool.query(
+      `SELECT ${CUSTOMER_USER_COLUMNS_SQL} FROM users WHERE id = $1`,
+      [req.user.userId]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'User not found' });
@@ -187,7 +191,7 @@ router.put('/profile', verifyToken.requireUserId,
         `UPDATE users
          SET ${updates.join(', ')}
          WHERE id = $${paramIndex}
-         RETURNING *`,
+         RETURNING ${CUSTOMER_USER_COLUMNS_SQL}`,
         values
       );
 

@@ -5,13 +5,15 @@
   "scripts": {
     "start": "expo start",
     "start:localhost": "expo start --localhost",
-    "android": "expo start --android",
+    "android": "expo run:android",
     "ios": "expo start --ios",
     "web": "expo start --web",
     "ios:native": "expo run:ios",
     "android:native": "expo run:android",
     "prebuild:ios": "expo prebuild --platform ios",
-    "postinstall": "patch-package"
+    "postinstall": "patch-package",
+    "test:api-origin": "node --test src/config/apiOriginPolicy.test.js",
+    "assert:release-api-url": "node scripts/assert-release-api-url.js"
   },
   "dependencies": {
     "@expo-google-fonts/inter": "^0.4.2",

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,8 @@ import {
   ScrollView,
   TouchableOpacity,
   Switch,
+  Animated,
+  Easing,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,7 +15,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
-import { fonts, radii, space, ambientElevation } from '../utils/designTokens';
+import { fonts, radii, space, ambientElevation, brand } from '../utils/designTokens';
 import { IconButton } from '../components/ui';
 import {
   fetchPushPreference,
@@ -24,11 +26,41 @@ import {
 
 export default function SettingsScreen() {
   const navigation = useNavigation();
-  const { colors, isDarkMode, toggleTheme } = useTheme();
+  const { colors, isDarkMode, themeMode, changeThemeMode } = useTheme();
   const { language, changeLanguage, t, isRTL } = useLanguage();
   const [notificationsEnabled, setNotificationsEnabled] = React.useState(true);
   const [preferenceReady, setPreferenceReady] = React.useState(false);
   const [preferenceSaving, setPreferenceSaving] = React.useState(false);
+  const flip = useRef(new Animated.Value(0)).current;
+  const flipBusyRef = useRef(false);
+
+  const handleSelectLanguage = (nextLanguage) => {
+    if (nextLanguage === language || flipBusyRef.current) return;
+    flipBusyRef.current = true;
+    const dir = nextLanguage === 'ar' ? 1 : -1;
+    Animated.timing(flip, {
+      toValue: dir,
+      duration: 160,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) {
+        flip.setValue(0);
+        flipBusyRef.current = false;
+        return;
+      }
+      changeLanguage(nextLanguage);
+      flip.setValue(-dir);
+      Animated.timing(flip, {
+        toValue: 0,
+        duration: 200,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start(() => {
+        flipBusyRef.current = false;
+      });
+    });
+  };
 
   React.useEffect(() => {
     let cancelled = false;
@@ -74,8 +106,27 @@ export default function SettingsScreen() {
     }
   };
 
+  const flipRotateY = flip.interpolate({
+    inputRange: [-1, 0, 1],
+    outputRange: ['-90deg', '0deg', '90deg'],
+  });
+  const flipOpacity = flip.interpolate({
+    inputRange: [-1, -0.2, 0, 0.2, 1],
+    outputRange: [0.35, 1, 1, 1, 0.35],
+  });
+
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
+      <Animated.View
+        collapsable={false}
+        style={[
+          styles.flipSurface,
+          {
+            opacity: flipOpacity,
+            transform: [{ perspective: 1000 }, { rotateY: flipRotateY }],
+          },
+        ]}
+      >
       <View style={[styles.header, getFlexDirection(isRTL, 'row')]}>
         <IconButton
           name={isRTL ? 'arrow-forward' : 'arrow-back'}
@@ -107,22 +158,71 @@ export default function SettingsScreen() {
             />
           </View>
 
-          <View style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}>
+          <View
+            style={[
+              styles.settingItem,
+              styles.appearanceItem,
+              { backgroundColor: colors.card },
+              ambientElevation,
+            ]}
+          >
             <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
-              <Ionicons name={isDarkMode ? "moon" : "sunny-outline"} size={24} color={colors.text} />
+              <Ionicons
+                name={isDarkMode ? 'moon' : 'sunny-outline'}
+                size={24}
+                color={colors.text}
+                style={{ marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }}
+              />
               <View style={[styles.settingText, { marginLeft: isRTL ? 0 : space[3], marginRight: isRTL ? space[3] : 0 }]}>
-                <Text style={[styles.settingLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>{t('settings.darkMode')}</Text>
+                <Text style={[styles.settingLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
+                  {t('settings.appearance')}
+                </Text>
                 <Text style={[styles.settingDescription, { color: colors.textSecondary }, getTextAlign(isRTL, 'auto')]}>
-                  {isDarkMode ? t('settings.lightModeDesc') : t('settings.darkModeDesc')}
+                  {themeMode === 'system'
+                    ? t('settings.themeSystemDesc')
+                    : themeMode === 'dark'
+                      ? t('settings.themeDark')
+                      : t('settings.themeLight')}
                 </Text>
               </View>
             </View>
-            <Switch
-              value={isDarkMode}
-              onValueChange={toggleTheme}
-              trackColor={{ false: isDarkMode ? '#3f3f46' : '#e4e4e7', true: colors.primary }}
-              thumbColor="#ffffff"
-            />
+            <View
+              style={[
+                styles.languageTrack,
+                styles.appearanceTrack,
+                { alignSelf: isRTL ? 'flex-start' : 'flex-end' },
+              ]}
+            >
+              {[
+                { id: 'light', label: t('settings.themeLight') },
+                { id: 'dark', label: t('settings.themeDark') },
+                { id: 'system', label: t('settings.themeSystem') },
+              ].map((option) => {
+                const selected = themeMode === option.id;
+                return (
+                  <TouchableOpacity
+                    key={option.id}
+                    onPress={() => changeThemeMode(option.id)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    style={[
+                      styles.languageSegment,
+                      selected && styles.languageSegmentSelected,
+                    ]}
+                    activeOpacity={0.85}
+                  >
+                    <Text
+                      style={[
+                        styles.languageSegmentText,
+                        selected && styles.languageSegmentTextSelected,
+                      ]}
+                    >
+                      {option.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
           </View>
 
           <View style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}>
@@ -135,32 +235,44 @@ export default function SettingsScreen() {
                 </Text>
               </View>
             </View>
-            <View style={styles.languageButtons}>
+            <View style={styles.languageTrack}>
               <TouchableOpacity
+                onPress={() => handleSelectLanguage('en')}
+                accessibilityRole="button"
+                accessibilityState={{ selected: language === 'en' }}
                 style={[
-                  styles.languageButton,
-                  { backgroundColor: language === 'en' ? colors.primary : colors.inputBackground },
-                  language === 'en' && styles.languageButtonActive
+                  styles.languageSegment,
+                  language === 'en' && styles.languageSegmentSelected,
                 ]}
-                onPress={() => changeLanguage('en')}
+                activeOpacity={0.85}
               >
-                <Text style={[
-                  styles.languageButtonText,
-                  { color: language === 'en' ? '#ffffff' : colors.text }
-                ]}>EN</Text>
+                <Text
+                  style={[
+                    styles.languageSegmentText,
+                    language === 'en' && styles.languageSegmentTextSelected,
+                  ]}
+                >
+                  {t('welcome.languageEnglish')}
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
+                onPress={() => handleSelectLanguage('ar')}
+                accessibilityRole="button"
+                accessibilityState={{ selected: language === 'ar' }}
                 style={[
-                  styles.languageButton,
-                  { backgroundColor: language === 'ar' ? colors.primary : colors.inputBackground },
-                  language === 'ar' && styles.languageButtonActive
+                  styles.languageSegment,
+                  language === 'ar' && styles.languageSegmentSelected,
                 ]}
-                onPress={() => changeLanguage('ar')}
+                activeOpacity={0.85}
               >
-                <Text style={[
-                  styles.languageButtonText,
-                  { color: language === 'ar' ? '#ffffff' : colors.text }
-                ]}>AR</Text>
+                <Text
+                  style={[
+                    styles.languageSegmentText,
+                    language === 'ar' && styles.languageSegmentTextSelected,
+                  ]}
+                >
+                  {t('welcome.languageArabic')}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -272,6 +384,7 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </View>
       </ScrollView>
+      </Animated.View>
     </SafeAreaView>
   );
 }
@@ -279,6 +392,10 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  flipSurface: {
+    flex: 1,
+    backfaceVisibility: 'hidden',
   },
   header: {
     flexDirection: 'row',
@@ -321,6 +438,15 @@ const styles = StyleSheet.create({
     borderRadius: radii['2xl'],
     marginBottom: space[3],
   },
+  appearanceItem: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    gap: space[3],
+  },
+  appearanceTrack: {
+    flexGrow: 0,
+    flexShrink: 0,
+  },
   settingInfo: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -338,23 +464,36 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: space[1],
   },
-  languageButtons: {
+  languageTrack: {
     flexDirection: 'row',
-    gap: 8,
-  },
-  languageButton: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: radii.xl,
-    minWidth: 50,
     alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 22,
+    padding: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  languageButtonActive: {
-    // Already handled by backgroundColor
+  languageSegment: {
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+    borderRadius: 18,
   },
-  languageButtonText: {
-    fontFamily: fonts.labelBold,
+  languageSegmentSelected: {
+    backgroundColor: brand.primary,
+  },
+  languageSegmentText: {
+    fontFamily: fonts.label,
     fontSize: 14,
+    color: '#1a1c1c',
+    textDecorationLine: 'none',
+  },
+  languageSegmentTextSelected: {
+    color: '#ffffff',
+    fontFamily: fonts.labelBold,
+    textDecorationLine: 'none',
   },
 });
 

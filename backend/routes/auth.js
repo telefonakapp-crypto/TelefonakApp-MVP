@@ -18,6 +18,12 @@ const {
   rotateRefreshSession,
   revokeRefreshToken,
 } = require('../utils/customerAuth');
+const { CUSTOMER_USER_COLUMNS_SQL } = require('../utils/userColumns');
+const {
+  normalizePhoneNumber,
+  phoneNumberVariants,
+  phoneNumberValidator,
+} = require('../utils/phone');
 
 function clientMeta(req) {
   return {
@@ -30,7 +36,7 @@ function clientMeta(req) {
 router.post(
   '/request-otp',
   otpRequestLimiter,
-  [body('phone_number').isMobilePhone('ar-JO').withMessage('Invalid Jordanian phone number')],
+  [phoneNumberValidator('phone_number')],
   async (req, res) => {
     try {
       const errors = validationResult(req);
@@ -38,7 +44,7 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { phone_number } = req.body;
+      const phone_number = normalizePhoneNumber(req.body.phone_number);
       const issued = await issueOtp(pool, {
         phoneNumber: phone_number,
         purpose: OTP_PURPOSE.AUTH,
@@ -68,7 +74,7 @@ router.post(
   '/verify-otp',
   otpVerifyLimiter,
   [
-    body('phone_number').isMobilePhone('ar-JO').withMessage('Invalid Jordanian phone number'),
+    phoneNumberValidator('phone_number'),
     otpValidator('otp'),
   ],
   async (req, res) => {
@@ -78,7 +84,8 @@ router.post(
         return res.status(400).json({ errors: errors.array() });
       }
 
-      const { phone_number, otp } = req.body;
+      const phone_number = normalizePhoneNumber(req.body.phone_number);
+      const { otp } = req.body;
 
       const consumed = await consumeOtp(pool, {
         phoneNumber: phone_number,
@@ -90,9 +97,10 @@ router.post(
         return sendOtpError(res, consumed);
       }
 
-      const userResult = await pool.query('SELECT * FROM users WHERE phone_number = $1', [
-        phone_number,
-      ]);
+      const userResult = await pool.query(
+        `SELECT ${CUSTOMER_USER_COLUMNS_SQL} FROM users WHERE phone_number = ANY($1::text[])`,
+        [phoneNumberVariants(phone_number)]
+      );
       const existingUser = userResult.rows[0];
 
       // Deactivated accounts cannot log in. They must re-complete registration

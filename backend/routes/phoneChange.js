@@ -7,6 +7,7 @@ const {
   issueCustomerSession,
   revokeAllUserSessions,
 } = require('../utils/customerAuth');
+const { CUSTOMER_USER_COLUMNS_SQL } = require('../utils/userColumns');
 const {
   OTP_PURPOSE,
   issueOtp,
@@ -185,7 +186,7 @@ router.post('/verify', otpVerifyLimiter, [otpValidator('otp')], async (req, res)
            pending_phone_expires_at = NULL,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $1 AND pending_phone_number = $2
-       RETURNING *`,
+       RETURNING ${CUSTOMER_USER_COLUMNS_SQL}`,
       [userId, me.pending_phone_number]
     );
 

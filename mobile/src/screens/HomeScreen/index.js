@@ -88,27 +88,29 @@ export default function HomeScreen() {
   const fetchUserProfile = useCallback(async () => {
     try {
       const response = await withNetworkRetry(() => apiClient.get('/user/profile'));
-      if (response.data.user) {
-        const profile = response.data.user;
-        const firstName = profile.first_name || '';
-        const lastName = profile.last_name || '';
-        const fullName = `${firstName} ${lastName}`.trim();
-        setUserName(fullName || 'User');
+      const profile = response.data?.user;
+      if (!profile) {
+        return;
+      }
+      const fullName = `${profile.first_name || ''} ${profile.last_name || ''}`.trim();
+      if (fullName) {
+        setUserName(fullName);
+      }
+      if (profile.id != null) {
         setCurrentUserId(profile.id);
-      } else {
-        setUserName('User');
-        setCurrentUserId(null);
       }
     } catch (error) {
       if (
         error?.isMaintenance ||
         error?.name === 'MaintenanceError' ||
-        error?.code === 'ERR_MAINTENANCE'
+        error?.code === 'ERR_MAINTENANCE' ||
+        error?.code === 'ERR_CANCELED' ||
+        error?.name === 'CanceledError' ||
+        error?.name === 'AbortError'
       ) {
         return;
       }
       logApiError('HomeScreen.fetchUserProfile', error);
-      setUserName('User');
     }
   }, []);
 
@@ -152,13 +154,9 @@ export default function HomeScreen() {
 
   useEffect(() => {
     fetchFilterData();
-    refreshUnreadCount();
-    refreshUnreadOffersCount();
-    fetchUserProfile();
-    fetchBanners();
     // Cached in FavoritesContext, so this only hits the API once per session.
     loadFavorites();
-  }, [refreshUnreadCount, refreshUnreadOffersCount, fetchUserProfile, fetchBanners, loadFavorites]);
+  }, [loadFavorites]);
 
   useFocusEffect(
     useCallback(() => {
@@ -168,14 +166,6 @@ export default function HomeScreen() {
       fetchBanners();
     }, [refreshUnreadCount, refreshUnreadOffersCount, fetchUserProfile, fetchBanners])
   );
-
-  // Refresh user name when screen comes into focus (e.g., after editing profile)
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => {
-      fetchUserProfile();
-    });
-    return unsubscribe;
-  }, [navigation, fetchUserProfile]);
 
   // Auto-scroll banners if there are multiple
   useEffect(() => {
@@ -356,7 +346,7 @@ export default function HomeScreen() {
               accessibilityLabel={t('home.profileNav')}
             >
               <Text style={[styles.headerAvatarText, { color: colors.primary }]}>
-                {(userName || 'U').charAt(0).toUpperCase()}
+                {userName ? userName.charAt(0).toUpperCase() : ''}
               </Text>
             </TouchableOpacity>
             <Text style={[styles.headerTitle, { color: colors.text }, getTextAlign(isRTL, 'center')]}>

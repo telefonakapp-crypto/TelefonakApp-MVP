@@ -5,7 +5,7 @@
 require('dotenv').config();
 const pool = require('../config/database');
 const jwt = require('jsonwebtoken');
-const { getJwtSecret } = require('../config/env');
+const { getAdminJwtSecret, ADMIN_JWT_ISS, ADMIN_JWT_AUD } = require('../config/env');
 
 async function get(path, token) {
   const res = await fetch(`http://127.0.0.1:3000/api${path}`, {
@@ -19,7 +19,11 @@ async function get(path, token) {
   const admin = (
     await pool.query(`SELECT id FROM admins WHERE is_active ORDER BY id LIMIT 1`)
   ).rows[0];
-  const token = jwt.sign({ adminId: admin.id }, getJwtSecret(), { expiresIn: '1h' });
+  const token = jwt.sign(
+    { adminId: admin.id, typ: 'admin' },
+    getAdminJwtSecret(),
+    { expiresIn: '1h', issuer: ADMIN_JWT_ISS, audience: ADMIN_JWT_AUD }
+  );
 
   const target = (
     await pool.query(

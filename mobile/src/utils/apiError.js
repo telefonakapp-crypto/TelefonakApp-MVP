@@ -121,6 +121,8 @@ export function logApiError(context, error) {
     data: error?.response?.data,
     message: error?.message,
     code: error?.code,
+    url: error?.config?.url,
+    baseURL: error?.config?.baseURL,
   };
 
   if (isHandledClientError(error) || isNetworkError(error)) {

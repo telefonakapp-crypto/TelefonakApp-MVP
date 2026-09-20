@@ -1,7 +1,8 @@
 const crypto = require('crypto');
 const { body } = require('express-validator');
-const { isProduction, getOtpPepper } = require('../config/env');
+const { isProduction, getOtpPepper, getTwilioSmsConfig } = require('../config/env');
 const { getOtpConfig, isOtpDevMode } = require('../config/otp');
+const { normalizePhoneNumber } = require('./phone');
 
 /**
  * Shared OTP service, used by every flow that needs a one-time code (login,
@@ -76,24 +77,33 @@ function logDevOtp(phoneNumber, code) {
   );
 }
 
-async function sendOtp(phoneNumber, code) {
-  const sid = process.env.TWILIO_ACCOUNT_SID;
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  const from = process.env.TWILIO_PHONE_NUMBER;
+async function sendOtp(phoneNumber, code, options = {}) {
+  const twilioConfig = getTwilioSmsConfig();
   let sentViaTwilio = false;
 
-  if (sid && token && from && !sid.startsWith('your_')) {
+  if (twilioConfig) {
     try {
-      const twilio = require('twilio');
-      const client = twilio(sid, token);
-      await client.messages.create({
-        body: `Your Telefonak verification code is: ${code}`,
-        from,
+      const sendMessage =
+        typeof options.sendMessage === 'function'
+          ? options.sendMessage
+          : async ({ to, from, body }) => {
+              const twilio = require('twilio');
+              const client = twilio(twilioConfig.accountSid, twilioConfig.authToken);
+              await client.messages.create({ body, from, to });
+            };
+
+      await sendMessage({
         to: phoneNumber,
+        from: twilioConfig.phoneNumber,
+        body: `Your Telefonak verification code is: ${code}`,
       });
       sentViaTwilio = true;
     } catch (error) {
-      console.error('[otp] Twilio send failed:', error.message || error);
+      if (isProduction()) {
+        console.error('[otp] Twilio send failed');
+      } else {
+        console.error('[otp] Twilio send failed:', error.message || error);
+      }
       throw error;
     }
   }
@@ -103,14 +113,11 @@ async function sendOtp(phoneNumber, code) {
     logDevOtp(phoneNumber, code);
   } else if (!sentViaTwilio) {
     if (isProduction()) {
-      console.warn(
-        '[otp] Production OTP issued without Twilio credentials — configure TWILIO_* before launch'
-      );
-    } else {
-      // Non-production fallback without Twilio — still avoid logging the code
-      // unless Development Testing Mode is on (handled above).
-      console.log(`[TEST MODE] OTP issued for ${formatPhoneForDevLog(phoneNumber)} (code not logged)`);
+      throw new Error('OTP SMS delivery is unavailable');
     }
+    // Non-production fallback without Twilio — still avoid logging the code
+    // unless Development Testing Mode is on (handled above).
+    console.log(`[TEST MODE] OTP issued for ${formatPhoneForDevLog(phoneNumber)} (code not logged)`);
   }
 
   return true;
@@ -130,6 +137,12 @@ const secondsUntil = (date) => Math.max(1, Math.ceil((new Date(date).getTime() -
  *                  | {ok: false, reason: string, retryAfterSeconds: number}>}
  */
 async function issueOtp(pool, { phoneNumber, purpose = OTP_PURPOSE.AUTH }) {
+  const canonicalPhone = normalizePhoneNumber(phoneNumber);
+  if (!canonicalPhone) {
+    return { ok: false, reason: OTP_ERROR.INVALID };
+  }
+  phoneNumber = canonicalPhone;
+
   const {
     resendCooldownSeconds,
     otpTtlMinutes,
@@ -233,6 +246,12 @@ async function issueOtp(pool, { phoneNumber, purpose = OTP_PURPOSE.AUTH }) {
  * @returns {Promise<{ok: true} | {ok: false, reason: string, attemptsRemaining?: number}>}
  */
 async function consumeOtp(pool, { phoneNumber, code, purpose = OTP_PURPOSE.AUTH }) {
+  const canonicalPhone = normalizePhoneNumber(phoneNumber);
+  if (!canonicalPhone) {
+    return { ok: false, reason: OTP_ERROR.INVALID };
+  }
+  phoneNumber = canonicalPhone;
+
   const { maxVerifyAttempts } = getOtpConfig();
   const codeHash = hashOtpCode(phoneNumber, purpose, code);
 

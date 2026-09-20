@@ -14,7 +14,8 @@
     "generate:phone-catalog": "node scripts/generatePhoneCatalogSql.js",
     "generate:watch-attributes": "node scripts/generateSmartwatchAttributesSql.js",
     "create-super-admin": "node scripts/create-super-admin.js",
-    "test:security": "node security-tests/run.js"
+    "test:security": "node security-tests/run.js",
+    "test:env": "node --test config/env.test.js utils/otp.h4.test.js utils/adminToken.test.js utils/jwtIssAud.test.js utils/userColumns.test.js utils/rateLimitIdentity.test.js routes/listings.ownership.sql.test.js utils/imageContent.test.js utils/adminImageUpload.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

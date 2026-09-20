@@ -7,9 +7,6 @@ import {
   TouchableOpacity,
   Platform,
   Alert,
-  Modal,
-  FlatList,
-  Pressable,
   Image,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -32,8 +29,10 @@ import {
   deviceTimeZoneName,
 } from '../utils/dateUtils';
 import { useLanguage } from '../context/LanguageContext';
+import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import { fonts, brand, gradients, radii } from '../utils/designTokens';
 import { USER_GENDERS, userGenderLabel } from '../utils/userGender';
+import { SearchablePickerSheet } from '../components/ui/SearchablePickerSheet';
 
 const isValidEmail = (email) => {
   const regex =
@@ -55,6 +54,8 @@ const CITY_OPTIONS = [
   'Ajloun',
   'Mafraq',
 ];
+
+const CITY_PICKER_OPTIONS = CITY_OPTIONS.map((city) => ({ id: city, label: city }));
 
 const LOGO = require('../../assets/telefonak-app-icon-v5.png');
 
@@ -104,42 +105,42 @@ export default function RegisterScreen() {
 
   const handleRegister = async () => {
     if (!formData.first_name.trim()) {
-      Alert.alert('Error', 'Please enter your first name');
+      Alert.alert(t('common.error'), t('register.pleaseEnterFirstName'));
       firstNameRef.current?.focus();
       return;
     }
 
     if (!formData.last_name.trim()) {
-      Alert.alert('Error', 'Please enter your last name');
+      Alert.alert(t('common.error'), t('register.pleaseEnterLastName'));
       lastNameRef.current?.focus();
       return;
     }
 
     if (!formData.gender) {
-      Alert.alert('Error', 'Please select your gender');
+      Alert.alert(t('common.error'), t('register.pleaseSelectGender'));
       return;
     }
 
     if (!formData.email.trim()) {
-      Alert.alert('Error', 'Please enter your email');
+      Alert.alert(t('common.error'), t('register.pleaseEnterEmail'));
       emailRef.current?.focus();
       return;
     }
 
     if (!isValidEmail(formData.email.trim())) {
-      Alert.alert('Error', 'Please enter a valid email address');
+      Alert.alert(t('common.error'), t('register.pleaseEnterValidEmail'));
       emailRef.current?.focus();
       return;
     }
 
     if (!formData.date_of_birth) {
-      Alert.alert('Error', 'Please select your date of birth');
+      Alert.alert(t('common.error'), t('register.pleaseSelectDob'));
       setShowDOBPicker(true);
       return;
     }
 
     if (!formData.city) {
-      Alert.alert('Error', 'Please select your city');
+      Alert.alert(t('common.error'), t('register.pleaseSelectCity'));
       return;
     }
 
@@ -155,8 +156,8 @@ export default function RegisterScreen() {
 
       if (!verificationToken) {
         Alert.alert(
-          'Verification required',
-          'Phone number not verified.\n\nPlease verify your phone number before completing registration.'
+          t('register.verificationRequired'),
+          t('register.phoneNotVerified')
         );
         return;
       }
@@ -179,10 +180,10 @@ export default function RegisterScreen() {
     } catch (error) {
       logApiError('RegisterScreen.register', error);
       Alert.alert(
-        'Unable to complete registration',
+        t('register.unableToComplete'),
         getApiErrorMessage(
           error,
-          'We could not complete your registration. Please try again.'
+          t('register.couldNotComplete')
         )
       );
     } finally {
@@ -208,14 +209,19 @@ export default function RegisterScreen() {
     <LinearGradient colors={gradients.primary} style={styles.container}>
       <SafeAreaView style={styles.safeArea} edges={['top']}>
         <View style={[styles.navBar, isRTL && styles.navBarRtl]}>
-          <TouchableOpacity onPress={goBack} style={styles.backButton} accessibilityRole="button">
+          <TouchableOpacity
+            onPress={goBack}
+            style={styles.backButton}
+            accessibilityRole="button"
+            accessibilityLabel={t('common.back')}
+          >
             <Ionicons
               name={isRTL ? 'arrow-forward' : 'arrow-back'}
               size={24}
               color="#ffffff"
             />
           </TouchableOpacity>
-          <Text style={styles.navTitle}>Complete Your Profile</Text>
+          <Text style={styles.navTitle}>{t('register.completeYourProfile')}</Text>
           <View style={styles.navSpacer} />
         </View>
 
@@ -228,37 +234,43 @@ export default function RegisterScreen() {
         >
           <View style={styles.content}>
             <Image source={LOGO} style={styles.logo} resizeMode="contain" accessibilityLabel="Telefonak" />
-            <Text style={styles.title}>Complete Your Profile</Text>
-            <Text style={styles.subtitle}>Tell us a bit about yourself</Text>
+            <Text style={styles.title}>{t('register.completeYourProfile')}</Text>
+            <Text style={styles.subtitle}>{t('register.tellUsAboutYourself')}</Text>
 
             <View style={styles.form}>
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>First Name *</Text>
+                <Text style={[styles.label, getTextAlign(isRTL, 'auto')]}>
+                  {t('register.firstName')} *
+                </Text>
                 <TextInput
                   ref={firstNameRef}
-                  style={styles.input}
-                  placeholder="Enter your first name"
-                  placeholderTextColor="rgba(255, 255, 255, 0.6)"
+                  style={[styles.input, getTextAlign(isRTL, 'left')]}
+                  placeholder={t('register.enterFirstName')}
+                  placeholderTextColor={brand.secondary}
                   value={formData.first_name}
                   onChangeText={(text) => handleInputChange('first_name', text)}
                 />
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>Last Name *</Text>
+                <Text style={[styles.label, getTextAlign(isRTL, 'auto')]}>
+                  {t('register.lastName')} *
+                </Text>
                 <TextInput
                   ref={lastNameRef}
-                  style={styles.input}
-                  placeholder="Enter your last name"
-                  placeholderTextColor="rgba(255, 255, 255, 0.6)"
+                  style={[styles.input, getTextAlign(isRTL, 'left')]}
+                  placeholder={t('register.enterLastName')}
+                  placeholderTextColor={brand.secondary}
                   value={formData.last_name}
                   onChangeText={(text) => handleInputChange('last_name', text)}
                 />
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>Gender *</Text>
-                <View style={styles.genderContainer}>
+                <Text style={[styles.label, getTextAlign(isRTL, 'auto')]}>
+                  {t('register.gender')} *
+                </Text>
+                <View style={[styles.genderContainer, getFlexDirection(isRTL, 'row')]}>
                   {USER_GENDERS.map((gender) => (
                     <TouchableOpacity
                       key={gender}
@@ -283,12 +295,14 @@ export default function RegisterScreen() {
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>Email *</Text>
+                <Text style={[styles.label, getTextAlign(isRTL, 'auto')]}>
+                  {t('register.email')} *
+                </Text>
                 <TextInput
                   ref={emailRef}
-                  style={styles.input}
-                  placeholder="Enter your email"
-                  placeholderTextColor="rgba(255, 255, 255, 0.6)"
+                  style={[styles.input, getTextAlign(isRTL, 'left')]}
+                  placeholder={t('register.enterEmail')}
+                  placeholderTextColor={brand.secondary}
                   value={formData.email}
                   onChangeText={(text) => handleInputChange('email', text)}
                   keyboardType="email-address"
@@ -297,7 +311,9 @@ export default function RegisterScreen() {
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>Date of Birth *</Text>
+                <Text style={[styles.label, getTextAlign(isRTL, 'auto')]}>
+                  {t('register.dateOfBirth')} *
+                </Text>
 
                 <TouchableOpacity
                   style={styles.input}
@@ -308,12 +324,15 @@ export default function RegisterScreen() {
                   }}
                 >
                   <Text
-                    style={{
-                      color: formData.date_of_birth ? brand.onSurface : 'rgba(255, 255, 255, 0.6)',
-                      fontSize: 16,
-                    }}
+                    style={[
+                      getTextAlign(isRTL, 'left'),
+                      {
+                        color: formData.date_of_birth ? brand.onSurface : brand.secondary,
+                        fontSize: 16,
+                      },
+                    ]}
                   >
-                    {formData.date_of_birth || 'Select date'}
+                    {formData.date_of_birth || t('register.selectDate')}
                   </Text>
                 </TouchableOpacity>
 
@@ -346,9 +365,14 @@ export default function RegisterScreen() {
 
                   {showDOBPicker && Platform.OS === 'ios' && (
                     <View style={styles.iosPickerContainer}>
-                      <View style={styles.iosPickerHeader}>
+                      <View
+                        style={[
+                          styles.iosPickerHeader,
+                          isRTL && styles.iosPickerHeaderRtl,
+                        ]}
+                      >
                         <TouchableOpacity onPress={() => setShowDOBPicker(false)}>
-                          <Text style={styles.doneText}>Done</Text>
+                          <Text style={styles.doneText}>{t('common.done')}</Text>
                         </TouchableOpacity>
                       </View>
 
@@ -376,20 +400,25 @@ export default function RegisterScreen() {
               </View>
 
               <View style={styles.inputGroup}>
-                <Text style={styles.label}>City *</Text>
+                <Text style={[styles.label, getTextAlign(isRTL, 'auto')]}>
+                  {t('register.city')} *
+                </Text>
                 <TouchableOpacity
-                  style={[styles.input, styles.citySelector]}
+                  style={[styles.input, styles.citySelector, getFlexDirection(isRTL, 'row')]}
                   activeOpacity={0.7}
                   onPress={() => setCityPickerVisible(true)}
                 >
                   <Text
-                    style={{
-                      color: formData.city ? brand.onSurface : 'rgba(255, 255, 255, 0.6)',
-                      fontSize: 16,
-                      flex: 1,
-                    }}
+                    style={[
+                      getTextAlign(isRTL, 'left'),
+                      {
+                        color: formData.city ? brand.onSurface : brand.secondary,
+                        fontSize: 16,
+                        flex: 1,
+                      },
+                    ]}
                   >
-                    {formData.city || 'Select city'}
+                    {formData.city || t('register.selectCity')}
                   </Text>
                   <Ionicons name="chevron-down" size={18} color="#ffffff" />
                 </TouchableOpacity>
@@ -401,7 +430,7 @@ export default function RegisterScreen() {
                 disabled={loading}
               >
                 <Text style={styles.buttonText}>
-                  {loading ? 'Registering...' : 'Complete Registration'}
+                  {loading ? t('register.registering') : t('register.completeRegistration')}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -409,44 +438,16 @@ export default function RegisterScreen() {
         </KeyboardAwareScrollView>
       </SafeAreaView>
 
-      <Modal
-        visible={cityPickerVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setCityPickerVisible(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setCityPickerVisible(false)}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.modalTitle}>Select city</Text>
-            <FlatList
-              data={CITY_OPTIONS}
-              keyExtractor={(item) => item}
-              keyboardShouldPersistTaps="handled"
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={[
-                    styles.cityOption,
-                    formData.city === item && styles.cityOptionSelected,
-                  ]}
-                  onPress={() => {
-                    handleInputChange('city', item);
-                    setCityPickerVisible(false);
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.cityOptionText,
-                      formData.city === item && styles.cityOptionTextSelected,
-                    ]}
-                  >
-                    {item}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            />
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <SearchablePickerSheet
+        open={cityPickerVisible}
+        onClose={() => setCityPickerVisible(false)}
+        title={t('register.city')}
+        options={CITY_PICKER_OPTIONS}
+        selectedId={formData.city}
+        onSelect={(item) => handleInputChange('city', item.label)}
+        searchPlaceholder={t('register.searchCities')}
+        emptyText={t('register.noCitiesFound')}
+      />
     </LinearGradient>
   );
 }
@@ -591,40 +592,8 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     borderBottomWidth: 0,
   },
+  iosPickerHeaderRtl: {
+    alignItems: 'flex-start',
+  },
   doneText: { fontFamily: fonts.labelBold, fontSize: 16, color: brand.primary },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-  },
-  modalCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 16,
-    maxHeight: '70%',
-    paddingVertical: 12,
-    overflow: 'hidden',
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#1a1c1c',
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-  },
-  cityOption: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-  },
-  cityOptionSelected: {
-    backgroundColor: 'rgba(102, 126, 234, 0.12)',
-  },
-  cityOptionText: {
-    fontSize: 16,
-    color: '#1a1c1c',
-  },
-  cityOptionTextSelected: {
-    color: '#1976D2',
-    fontWeight: '600',
-  },
 });
