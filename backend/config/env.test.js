@@ -45,6 +45,9 @@ function runValidate(envOverrides) {
     TWILIO_ACCOUNT_SID: TWILIO_SID,
     TWILIO_AUTH_TOKEN: TWILIO_TOKEN,
     TWILIO_PHONE_NUMBER: TWILIO_FROM,
+    TEST_OTP_BYPASS_ENABLED: '',
+    TEST_OTP_PHONE: '',
+    TEST_OTP_CODE: '',
     ADMIN_ACCESS_TOKEN_TTL: '8h',
     ...envOverrides,
   };
@@ -263,6 +266,9 @@ describe('Twilio production startup validation', () => {
       TWILIO_ACCOUNT_SID: '',
       TWILIO_AUTH_TOKEN: '',
       TWILIO_PHONE_NUMBER: '',
+      TEST_OTP_BYPASS_ENABLED: '',
+      TEST_OTP_PHONE: '',
+      TEST_OTP_CODE: '',
       ADMIN_ACCESS_TOKEN_TTL: '8h',
     };
 
@@ -278,6 +284,77 @@ describe('Twilio production startup validation', () => {
     assert.doesNotMatch(output, /Server is running/);
     assert.match(output, /TWILIO_/);
     assertNoSecretLeak(output);
+  });
+});
+
+describe('TEST_OTP bypass production Twilio exemption', () => {
+  const productionJwt = {
+    JWT_CUSTOMER_SECRET: CUSTOMER,
+    JWT_ADMIN_SECRET: ADMIN,
+  };
+  const validBypassPhone = '0790000111';
+  const validBypassCode = '9999';
+
+  it('A. production + valid bypass + no Twilio credentials → PASS', () => {
+    const result = runValidate({
+      ...productionJwt,
+      TWILIO_ACCOUNT_SID: '',
+      TWILIO_AUTH_TOKEN: '',
+      TWILIO_PHONE_NUMBER: '',
+      TEST_OTP_BYPASS_ENABLED: 'true',
+      TEST_OTP_PHONE: validBypassPhone,
+      TEST_OTP_CODE: validBypassCode,
+    });
+    assert.equal(result.ok, true);
+    assertNoSecretLeak(result.message);
+  });
+
+  it('B. production + bypass disabled + missing Twilio → FAIL', () => {
+    const result = runValidate({
+      ...productionJwt,
+      TWILIO_ACCOUNT_SID: '',
+      TWILIO_AUTH_TOKEN: '',
+      TWILIO_PHONE_NUMBER: '',
+      TEST_OTP_BYPASS_ENABLED: 'false',
+      TEST_OTP_PHONE: validBypassPhone,
+      TEST_OTP_CODE: validBypassCode,
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.message, /TWILIO_ACCOUNT_SID/);
+    assert.match(result.message, /TWILIO_AUTH_TOKEN/);
+    assert.match(result.message, /TWILIO_PHONE_NUMBER/);
+    assertNoSecretLeak(result.message);
+  });
+
+  it('C. production + ENABLED=true with invalid bypass config → FAIL (does not silently skip Twilio validation)', () => {
+    const result = runValidate({
+      ...productionJwt,
+      TWILIO_ACCOUNT_SID: '',
+      TWILIO_AUTH_TOKEN: '',
+      TWILIO_PHONE_NUMBER: '',
+      TEST_OTP_BYPASS_ENABLED: 'true',
+      TEST_OTP_PHONE: 'not-a-phone',
+      TEST_OTP_CODE: validBypassCode,
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.message, /TEST_OTP_PHONE|TEST_OTP_CODE|TEST_OTP_BYPASS_ENABLED/);
+    assertNoSecretLeak(result.message);
+  });
+
+  it('valid bypass does not skip JWT production requirements', () => {
+    const result = runValidate({
+      JWT_CUSTOMER_SECRET: '',
+      JWT_ADMIN_SECRET: ADMIN,
+      TWILIO_ACCOUNT_SID: '',
+      TWILIO_AUTH_TOKEN: '',
+      TWILIO_PHONE_NUMBER: '',
+      TEST_OTP_BYPASS_ENABLED: 'true',
+      TEST_OTP_PHONE: validBypassPhone,
+      TEST_OTP_CODE: validBypassCode,
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.message, /JWT_CUSTOMER_SECRET/);
+    assertNoSecretLeak(result.message);
   });
 });
 

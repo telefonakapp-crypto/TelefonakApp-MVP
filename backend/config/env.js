@@ -4,6 +4,8 @@
  */
 require('dotenv').config();
 
+const { normalizePhoneNumber } = require('../utils/phone');
+
 const WEAK_JWT_SECRETS = new Set([
   '',
   'your-secret-key',
@@ -162,7 +164,7 @@ function isTwilioPlaceholder(value) {
 }
 
 /**
- * Raw TEST_OTP_* settings (phone is canonicalized in utils/otp.js).
+ * Raw TEST_OTP_* settings (phone is canonicalized here and in utils/otp.js).
  * Bypass is inactive unless ENABLED is exactly "true".
  */
 function getTestOtpBypassSettings() {
@@ -171,6 +173,34 @@ function getTestOtpBypassSettings() {
     phone: readEnvSecret('TEST_OTP_PHONE'),
     code: readEnvSecret('TEST_OTP_CODE'),
   };
+}
+
+/** Matches backend/config/otp.js otpLength (always 4). */
+const TEST_OTP_CODE_RE = /^\d{4}$/;
+
+function isTestOtpBypassRequested() {
+  return getTestOtpBypassSettings().enabled;
+}
+
+function isTestOtpBypassConfigValid() {
+  const settings = getTestOtpBypassSettings();
+  if (!settings.enabled) return false;
+  const phone = normalizePhoneNumber(settings.phone);
+  const code = String(settings.code || '').trim();
+  return Boolean(phone && TEST_OTP_CODE_RE.test(code));
+}
+
+/**
+ * Production: ENABLED=true with invalid phone/code must fail startup.
+ * Do not silently disable the bypass (and do not fall through to Twilio).
+ */
+function assertProductionTestOtpBypassConfig() {
+  if (!isProduction()) return;
+  if (!isTestOtpBypassRequested()) return;
+  if (isTestOtpBypassConfigValid()) return;
+  throw new Error(
+    'TEST_OTP_BYPASS_ENABLED=true requires a valid TEST_OTP_PHONE (Jordanian mobile) and TEST_OTP_CODE (4 digits)'
+  );
 }
 
 /**
@@ -192,6 +222,7 @@ function getTwilioSmsConfig() {
 
 function assertProductionTwilioConfig() {
   if (!isProduction()) return;
+  if (isTestOtpBypassConfigValid()) return;
 
   const accountSid = readEnvSecret('TWILIO_ACCOUNT_SID');
   const authToken = readEnvSecret('TWILIO_AUTH_TOKEN');
@@ -292,9 +323,11 @@ function validateEnv() {
     }
     if (!process.env.BASE_URL) missing.push('BASE_URL');
     if (!process.env.CORS_ORIGINS) missing.push('CORS_ORIGINS');
-    if (!readEnvSecret('TWILIO_ACCOUNT_SID')) missing.push('TWILIO_ACCOUNT_SID');
-    if (!readEnvSecret('TWILIO_AUTH_TOKEN')) missing.push('TWILIO_AUTH_TOKEN');
-    if (!readEnvSecret('TWILIO_PHONE_NUMBER')) missing.push('TWILIO_PHONE_NUMBER');
+    if (!isTestOtpBypassRequested()) {
+      if (!readEnvSecret('TWILIO_ACCOUNT_SID')) missing.push('TWILIO_ACCOUNT_SID');
+      if (!readEnvSecret('TWILIO_AUTH_TOKEN')) missing.push('TWILIO_AUTH_TOKEN');
+      if (!readEnvSecret('TWILIO_PHONE_NUMBER')) missing.push('TWILIO_PHONE_NUMBER');
+    }
     if (!isUsableOtpPepper(readEnvSecret('OTP_PEPPER'))) {
       missing.push('OTP_PEPPER');
     }
@@ -307,6 +340,7 @@ function validateEnv() {
   }
 
   assertDistinctJwtSecrets();
+  assertProductionTestOtpBypassConfig();
   assertProductionTwilioConfig();
   assertAdminAccessTokenTtl();
   assertDistinctOtpPepper();
@@ -325,6 +359,7 @@ module.exports = {
   getOtpPepper,
   getTwilioSmsConfig,
   getTestOtpBypassSettings,
+  isTestOtpBypassConfigValid,
   getAdminAccessTokenTtl,
   validateEnv,
   CUSTOMER_JWT_ISS,
