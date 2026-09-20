@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { body } = require('express-validator');
-const { isProduction, getOtpPepper, getTwilioSmsConfig } = require('../config/env');
+const { isProduction, getOtpPepper, getTwilioSmsConfig, getTestOtpBypassSettings } = require('../config/env');
 const { getOtpConfig, isOtpDevMode } = require('../config/otp');
 const { normalizePhoneNumber } = require('./phone');
 
@@ -38,7 +38,54 @@ const OTP_LIMIT = {
 // Development returns a fixed code so mobile QA stays simple without SMS.
 const TEST_MODE_CODE = '1234';
 
-function generateOtpCode() {
+let hasLoggedTestOtpBypass = false;
+
+/**
+ * One-phone TEST-ONLY bypass. Inactive unless TEST_OTP_BYPASS_ENABLED=true
+ * and TEST_OTP_PHONE / TEST_OTP_CODE are valid. Fail closed on misconfig.
+ * Never logs the code.
+ */
+function getActiveTestOtpBypass() {
+  const settings = getTestOtpBypassSettings();
+  if (!settings.enabled) return null;
+
+  const phone = normalizePhoneNumber(settings.phone);
+  const code = String(settings.code || '').trim();
+  const { otpLength } = getOtpConfig();
+  const codeOk = new RegExp(`^\\d{${otpLength}}$`).test(code);
+
+  if (!phone || !codeOk) {
+    if (!hasLoggedTestOtpBypass) {
+      hasLoggedTestOtpBypass = true;
+      console.warn(
+        '[otp] TEST_OTP_BYPASS_ENABLED=true but TEST_OTP_PHONE or TEST_OTP_CODE is invalid — bypass inactive'
+      );
+    }
+    return null;
+  }
+
+  if (!hasLoggedTestOtpBypass) {
+    hasLoggedTestOtpBypass = true;
+    console.warn(
+      '[otp] TEST_OTP_BYPASS_ENABLED=true — SMS is skipped for the single configured test phone'
+    );
+  }
+
+  return { phone, code };
+}
+
+function getActiveTestOtpBypassFor(phoneNumber) {
+  const bypass = getActiveTestOtpBypass();
+  if (!bypass) return null;
+  const canonical = normalizePhoneNumber(phoneNumber);
+  if (!canonical || canonical !== bypass.phone) return null;
+  return bypass;
+}
+
+function generateOtpCode(phoneNumber) {
+  const bypass = getActiveTestOtpBypassFor(phoneNumber);
+  if (bypass) return bypass.code;
+
   if (isProduction() || process.env.OTP_MODE === 'random') {
     return String(crypto.randomInt(1000, 10000));
   }
@@ -78,6 +125,10 @@ function logDevOtp(phoneNumber, code) {
 }
 
 async function sendOtp(phoneNumber, code, options = {}) {
+  if (getActiveTestOtpBypassFor(phoneNumber)) {
+    return true;
+  }
+
   const twilioConfig = getTwilioSmsConfig();
   let sentViaTwilio = false;
 
@@ -199,7 +250,7 @@ async function issueOtp(pool, { phoneNumber, purpose = OTP_PURPOSE.AUTH }) {
       };
     }
 
-    const code = generateOtpCode();
+    const code = generateOtpCode(phoneNumber);
     const codeHash = hashOtpCode(phoneNumber, purpose, code);
     const expiresAt = new Date(Date.now() + otpTtlMinutes * 60 * 1000);
 
@@ -382,6 +433,8 @@ module.exports = {
   OTP_ERROR,
   OTP_LIMIT,
   generateOtpCode,
+  getActiveTestOtpBypass,
+  getActiveTestOtpBypassFor,
   hashOtpCode,
   sendOtp,
   shouldExposeOtpInResponse,

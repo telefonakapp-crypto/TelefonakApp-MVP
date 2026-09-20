@@ -162,6 +162,18 @@ function isTwilioPlaceholder(value) {
 }
 
 /**
+ * Raw TEST_OTP_* settings (phone is canonicalized in utils/otp.js).
+ * Bypass is inactive unless ENABLED is exactly "true".
+ */
+function getTestOtpBypassSettings() {
+  return {
+    enabled: readEnvSecret('TEST_OTP_BYPASS_ENABLED') === 'true',
+    phone: readEnvSecret('TEST_OTP_PHONE'),
+    code: readEnvSecret('TEST_OTP_CODE'),
+  };
+}
+
+/**
  * Twilio credentials used by utils/otp.js sendOtp.
  * Returns null when SMS cannot be sent (missing/placeholder config).
  */
@@ -312,6 +324,7 @@ module.exports = {
   getAdminJwtSecret,
   getOtpPepper,
   getTwilioSmsConfig,
+  getTestOtpBypassSettings,
   getAdminAccessTokenTtl,
   validateEnv,
   CUSTOMER_JWT_ISS,
