@@ -355,6 +355,14 @@ export default function HomeScreen() {
             <View style={[styles.headerRight, getFlexDirection(isRTL, 'row')]}>
               <TouchableOpacity
                 style={styles.bellButton}
+                onPress={() => navigation.navigate('SavedListings')}
+                accessibilityRole="button"
+                accessibilityLabel={t('home.favorites') || t('savedListings.title') || 'Favorites'}
+              >
+                <Ionicons name="heart-outline" size={22} color={colors.text} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.bellButton}
                 onPress={() => navigation.navigate('Notifications')}
                 accessibilityRole="button"
                 accessibilityLabel={t('home.notifications')}
@@ -594,7 +602,7 @@ export default function HomeScreen() {
           )}
         />
 
-        {/* Bottom Nav: Home | Listings | Sell | Offers | Saved */}
+        {/* Bottom Nav: Home | Listings | Sell | Offers | Bids */}
         <HomeBottomNav
           unreadOffersCount={unreadOffersCount}
           onSell={handleCreateListing}
@@ -642,8 +650,8 @@ const styles = StyleSheet.create({
   headerRight: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    minWidth: 44,
+    gap: 0,
+    minWidth: 88,
     justifyContent: 'flex-end',
   },
   bellButton: {

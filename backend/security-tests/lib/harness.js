@@ -251,10 +251,20 @@ async function deleteListingsByIds(ids) {
   if (listingIds.length === 0) return { deleted: 0 };
 
   const related = await pool.query(
-    `SELECT id FROM listings
-     WHERE id = ANY($1::int[])
-        OR root_listing_id = ANY($1::int[])
-        OR previous_listing_id = ANY($1::int[])`,
+    `WITH RECURSIVE chain AS (
+       SELECT id FROM listings
+       WHERE id = ANY($1::int[])
+          OR root_listing_id = ANY($1::int[])
+          OR previous_listing_id = ANY($1::int[])
+          OR listed_from_listing_id = ANY($1::int[])
+       UNION
+       SELECT l.id
+       FROM listings l
+       JOIN chain c ON l.listed_from_listing_id = c.id
+          OR l.previous_listing_id = c.id
+          OR l.root_listing_id = c.id
+     )
+     SELECT id FROM chain`,
     [listingIds]
   );
   const allIds = [...new Set(related.rows.map((row) => row.id))];
@@ -275,12 +285,25 @@ async function deleteListingsByIds(ids) {
   await pool.query(`DELETE FROM listing_views WHERE listing_id = ANY($1::int[])`, [allIds]);
   await pool.query(`DELETE FROM favorites WHERE listing_id = ANY($1::int[])`, [allIds]);
   await pool.query(`DELETE FROM offers WHERE listing_id = ANY($1::int[])`, [allIds]);
+  await pool.query(
+    `UPDATE listing_auctions SET winning_bid_id = NULL WHERE listing_id = ANY($1::int[])`,
+    [allIds]
+  );
+  await pool.query(`DELETE FROM bids WHERE listing_id = ANY($1::int[])`, [allIds]);
+  await pool.query(`DELETE FROM listing_auctions WHERE listing_id = ANY($1::int[])`, [allIds]);
   await pool.query(`DELETE FROM listing_images WHERE listing_id = ANY($1::int[])`, [allIds]);
   await pool.query(
     `UPDATE listings
      SET previous_listing_id = NULL
      WHERE id = ANY($1::int[])
         OR previous_listing_id = ANY($1::int[])`,
+    [allIds]
+  );
+  await pool.query(
+    `UPDATE listings
+     SET listed_from_listing_id = NULL
+     WHERE id = ANY($1::int[])
+        OR listed_from_listing_id = ANY($1::int[])`,
     [allIds]
   );
   const result = await pool.query(`DELETE FROM listings WHERE id = ANY($1::int[])`, [allIds]);

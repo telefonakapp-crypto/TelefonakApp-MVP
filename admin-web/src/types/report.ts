@@ -46,6 +46,14 @@ export type ReportsOverview = {
     expired: number;
     disabled: number;
   };
+  bidding: {
+    bidListings: number;
+    liveAuctions: number;
+    completedAuctions: number;
+    cancelledAuctions: number;
+    totalBids: number;
+    averageBidsPerBidListing: number;
+  };
 };
 
 export type DailyCountPoint = {
@@ -71,6 +79,13 @@ export type ReportsCharts = {
   listingsByCondition: LabeledCount[];
   listingStatusDistribution: LabeledCount[];
   averagePriceByBrand: LabeledValue[];
+  bidsPlaced: DailyCountPoint[];
+};
+
+export type ReportsDemographics = {
+  ageGroups: LabeledCount[];
+  gender: LabeledCount[];
+  cities: LabeledCount[];
 };
 
 export type ReportExportType = 'users' | 'listings' | 'offers';

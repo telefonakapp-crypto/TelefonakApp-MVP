@@ -27,6 +27,7 @@ import {
 } from '../utils/otpCooldown';
 import { showToast } from '../utils/toast';
 import { showDevOtpAlert } from '../utils/devOtpDiagnostic';
+import { syncEnabledPushRegistration } from '../utils/pushRegistration';
 
 export default function OTPScreen() {
   const [otp, setOtp] = useState('');
@@ -110,6 +111,7 @@ export default function OTPScreen() {
           navigation.navigate('Register', { token: response.data.token });
         } else {
           await persistSession(response.data);
+          await syncEnabledPushRegistration({ requestPermission: false });
           navigation.dispatch(
             CommonActions.reset({
               index: 0,

@@ -11,6 +11,7 @@ export function Chip({
   selected = false,
   onPress,
   style,
+  textStyle,
   disabled = false,
 }) {
   const { colors } = useTheme();
@@ -18,7 +19,7 @@ export function Chip({
   return (
     <TouchableOpacity
       accessibilityRole="button"
-      accessibilityState={{ selected, disabled }}
+      accessibilityState={{ selected, disabled: disabled || !onPress }}
       activeOpacity={0.8}
       disabled={disabled || !onPress}
       onPress={onPress}
@@ -34,6 +35,7 @@ export function Chip({
         style={[
           styles.label,
           { color: selected ? colors.onPrimary : colors.text },
+          textStyle,
         ]}
       >
         {label}

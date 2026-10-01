@@ -5,12 +5,16 @@ type ListingsFiltersProps = {
   status: string;
   brand: string;
   seller: string;
+  sellerId: string;
+  saleType: string;
   brands: Array<{ id: number; name: string }>;
   onChange: (next: {
     search?: string;
     status?: string;
     brand?: string;
     seller?: string;
+    sellerId?: string;
+    saleType?: string;
   }) => void;
   onClear: () => void;
 };
@@ -26,17 +30,26 @@ const STATUS_OPTIONS = [
   { value: 'hidden', label: 'Hidden' },
 ];
 
+const SALE_TYPE_OPTIONS = [
+  { value: '', label: 'All' },
+  { value: 'normal', label: 'Normal' },
+  { value: 'bid', label: 'Bid' },
+];
+
 export function ListingsFilters({
   search,
   status,
   brand,
   seller,
+  sellerId,
+  saleType,
   brands,
   onChange,
   onClear,
 }: ListingsFiltersProps) {
   const [searchInput, setSearchInput] = useState(search);
   const [sellerInput, setSellerInput] = useState(seller);
+  const [sellerIdInput, setSellerIdInput] = useState(sellerId);
 
   useEffect(() => {
     setSearchInput(search);
@@ -45,6 +58,10 @@ export function ListingsFilters({
   useEffect(() => {
     setSellerInput(seller);
   }, [seller]);
+
+  useEffect(() => {
+    setSellerIdInput(sellerId);
+  }, [sellerId]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -64,11 +81,20 @@ export function ListingsFilters({
     return () => window.clearTimeout(timer);
   }, [sellerInput, seller, onChange]);
 
-  const hasFilters = Boolean(search || status || brand || seller);
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (sellerIdInput !== sellerId) {
+        onChange({ sellerId: sellerIdInput });
+      }
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [sellerIdInput, sellerId, onChange]);
+
+  const hasFilters = Boolean(search || status || brand || seller || sellerId || saleType);
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
         <div className="xl:col-span-2">
           <label htmlFor="listings-search" className="mb-1.5 block text-xs font-medium text-slate-500">
             Search
@@ -95,6 +121,24 @@ export function ListingsFilters({
           >
             {STATUS_OPTIONS.map((option) => (
               <option key={option.value || 'all'} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="listings-sale-type" className="mb-1.5 block text-xs font-medium text-slate-500">
+            Sale type
+          </label>
+          <select
+            id="listings-sale-type"
+            value={saleType}
+            onChange={(e) => onChange({ saleType: e.target.value })}
+            className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-slate-400"
+          >
+            {SALE_TYPE_OPTIONS.map((option) => (
+              <option key={option.value || 'all-sale-types'} value={option.value}>
                 {option.label}
               </option>
             ))}

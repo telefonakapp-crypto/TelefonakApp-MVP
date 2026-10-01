@@ -32,10 +32,12 @@ export function resolveNotificationDestination(item) {
   }
 
   // Existing behavior for every other type: open the listing when one is linked.
-  if (item.related_listing_id) {
+  // Bid one-hour (and other listing-linked types) open Listing Details.
+  // Listing Details refetches current state — notification copy is not auction state.
+  if (hasPositiveId(item.related_listing_id)) {
     return {
       name: 'ListingDetails',
-      params: { listingId: item.related_listing_id },
+      params: { listingId: Number(item.related_listing_id) },
       method: 'navigate',
     };
   }

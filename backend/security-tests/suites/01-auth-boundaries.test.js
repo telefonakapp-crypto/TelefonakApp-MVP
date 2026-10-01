@@ -48,6 +48,11 @@ describe('01 — Auth boundaries', () => {
     assert.equal(res.status, 401);
   });
 
+  it('rejects unauthenticated access to /admin/reports/demographics', async () => {
+    const res = await api('GET', '/admin/reports/demographics');
+    assert.equal(res.status, 401);
+  });
+
   it('allows customer JWT to access own /user/profile', async () => {
     const token = customerToken(fx.owner.id, fx.owner.phone_number);
     const res = await api('GET', '/user/profile', { token });

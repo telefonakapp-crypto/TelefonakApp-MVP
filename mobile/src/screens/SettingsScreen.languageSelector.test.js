@@ -43,6 +43,8 @@ describe('Settings language selector (UI only)', () => {
     assert.match(settings, /navigation\.navigate\('EditProfile'\)/);
     assert.match(settings, /handleToggleNotifications/);
     assert.match(settings, /changeThemeMode/);
+    assert.doesNotMatch(settings, /ImagePicker Diagnostic/);
+    assert.doesNotMatch(settings, /ImagePickerDiagnostic/);
   });
 
   it('offers Light / Dark / System without a binary Dark Mode switch', () => {

@@ -28,6 +28,13 @@ const {
   normalizeMarketplaceSearch,
   buildMarketplaceSearchClause,
 } = require('./marketplaceSearch');
+const {
+  AUCTION_JOIN_SQL,
+  AUCTION_INNER_JOIN_SQL,
+  AUCTION_PUBLIC_SELECT_SQL,
+  auctionViewerSelectSql,
+  parseCustomerListPaging,
+} = require('./listingAuctionSummary');
 
 const THUMBNAIL_SQL = `(SELECT image_url FROM listing_images WHERE listing_id = l.id ORDER BY display_order LIMIT 1)`;
 
@@ -66,9 +73,11 @@ const ADMIN_LIST_SELECT = `
   u.id AS seller_id,
   u.first_name AS seller_first_name,
   u.last_name AS seller_last_name,
+  l.sale_type,
   u.phone_number AS seller_phone,
   city.name_en AS city_name,
   area.name_en AS area_name,
+  ${AUCTION_PUBLIC_SELECT_SQL},
   (SELECT image_url
    FROM listing_images
    WHERE listing_id = l.id
@@ -86,6 +95,7 @@ const ADMIN_LIST_FROM = `
   LEFT JOIN cities city ON l.city_id = city.id
   LEFT JOIN areas area ON l.area_id = area.id
   LEFT JOIN admins moderator ON l.moderated_by_admin_id = moderator.id
+  ${AUCTION_JOIN_SQL}
 `;
 
 function pushParam(queryParams, value) {
@@ -286,7 +296,8 @@ async function fetchMarketplaceListings(pool, filters = {}) {
           u.last_name,
           city.name_en as city_name,
           area.name_en as area_name,
-          ${THUMBNAIL_SQL} as thumbnail_image
+          ${THUMBNAIL_SQL} as thumbnail_image,
+          ${AUCTION_PUBLIC_SELECT_SQL}
          FROM listings l
          ${LISTING_IDENTITY_JOINS}
          ${LISTING_STORAGE_JOIN}
@@ -296,6 +307,7 @@ async function fetchMarketplaceListings(pool, filters = {}) {
          JOIN users u ON l.user_id = u.id
          LEFT JOIN cities city ON l.city_id = city.id
          LEFT JOIN areas area ON l.area_id = area.id
+         ${AUCTION_JOIN_SQL}
          WHERE ${whereClause}
          ORDER BY ${orderBy}
          LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
@@ -317,13 +329,15 @@ function fetchOwnerMyListings(pool, userId) {
         ${LISTING_COLOR_SELECT_FIELDS},
         cond.name as condition_name,
         ${LISTING_WATCH_SELECT_FIELDS},
-        ${THUMBNAIL_SQL} as thumbnail_image
+        ${THUMBNAIL_SQL} as thumbnail_image,
+        ${AUCTION_PUBLIC_SELECT_SQL}
        FROM listings l
        ${LISTING_IDENTITY_JOINS}
        ${LISTING_STORAGE_JOIN}
        ${LISTING_COLOR_JOINS}
        JOIN conditions cond ON l.condition_id = cond.id
        ${LISTING_WATCH_JOINS}
+       ${AUCTION_JOIN_SQL}
        WHERE l.user_id = $1
          AND NOT EXISTS (
            SELECT 1 FROM listings child
@@ -379,8 +393,14 @@ function fetchFavoriteListings(pool, userId, { limit, offset } = {}) {
 /**
  * P3 — single listing row by id. No status/owner WHERE.
  * The route retains the public-vs-owner visibility gate.
+ * Optional viewerUserId loads that customer's bid summary in the same query.
  */
-function fetchListingRowById(pool, id) {
+function fetchListingRowById(pool, id, options = {}) {
+  const viewerUserId =
+    Number.isInteger(options.viewerUserId) && options.viewerUserId > 0
+      ? options.viewerUserId
+      : 0;
+
   return pool.query(
     `SELECT 
         l.*,
@@ -403,7 +423,9 @@ function fetchListingRowById(pool, id) {
         city.name_en AS city_name_en,
         city.name_ar AS city_name_ar,
         area.name_en AS area_name_en,
-        area.name_ar AS area_name_ar
+        area.name_ar AS area_name_ar,
+        ${AUCTION_PUBLIC_SELECT_SQL},
+        ${auctionViewerSelectSql('$2')}
        FROM listings l
        ${LISTING_IDENTITY_JOINS}
        ${LISTING_STORAGE_JOIN}
@@ -414,8 +436,9 @@ function fetchListingRowById(pool, id) {
        JOIN users u ON l.user_id = u.id
        LEFT JOIN cities city ON l.city_id = city.id
        LEFT JOIN areas area ON l.area_id = area.id
+       ${AUCTION_JOIN_SQL}
        WHERE l.id = $1`,
-    [id]
+    [id, viewerUserId]
   );
 }
 
@@ -445,7 +468,8 @@ function fetchListingRowAfterWrite(pool, id, options = {}) {
           ${LISTING_COLOR_SELECT_FIELDS},
           cond.name as condition_name,
           ${LISTING_SIM_NAME_SQL} as sim_configuration_name,
-          ${LISTING_WATCH_SELECT_FIELDS}${sellerSelectSql}
+          ${LISTING_WATCH_SELECT_FIELDS}${sellerSelectSql},
+          ${AUCTION_PUBLIC_SELECT_SQL}
          FROM listings l
          ${LISTING_IDENTITY_JOINS}
          ${LISTING_STORAGE_JOIN}
@@ -453,6 +477,7 @@ function fetchListingRowAfterWrite(pool, id, options = {}) {
          JOIN conditions cond ON l.condition_id = cond.id
          LEFT JOIN sim_configurations sim ON l.sim_configuration_id = sim.id
          ${LISTING_WATCH_JOINS}${sellerJoinSql}
+         ${AUCTION_JOIN_SQL}
          WHERE l.id = $1`,
     [id]
   );
@@ -466,7 +491,12 @@ async function fetchAdminListingList(pool, filters = {}) {
   const status = typeof filters.status === 'string' ? filters.status.trim() : '';
   const brand = typeof filters.brand === 'string' ? filters.brand.trim() : '';
   const seller = typeof filters.seller === 'string' ? filters.seller.trim() : '';
+  const sellerId =
+    Number.isInteger(filters.sellerId) && filters.sellerId > 0
+      ? filters.sellerId
+      : null;
   const search = normalizeMarketplaceSearch(filters.search);
+  const saleType = filters.saleType === 'bid' || filters.saleType === 'normal' ? filters.saleType : '';
   const limit = filters.limit;
   const offset = filters.offset;
 
@@ -496,6 +526,14 @@ async function fetchAdminListingList(pool, filters = {}) {
         OR (u.first_name || ' ' || u.last_name) ILIKE $${idx}
         OR u.phone_number ILIKE $${idx}
       )`);
+  }
+
+  if (sellerId != null) {
+    where.push(`l.user_id = $${add(sellerId)}`);
+  }
+
+  if (saleType) {
+    where.push(`l.sale_type = $${add(saleType)}`);
   }
 
   const searchClause = buildMarketplaceSearchClause(search, add);
@@ -563,7 +601,9 @@ function fetchAdminListingRowById(pool, id) {
          u.phone_number AS seller_phone,
          city.name_en AS city_name,
          area.name_en AS area_name,
-         moderator.full_name AS moderated_by_admin_name
+         moderator.full_name AS moderated_by_admin_name,
+         ${AUCTION_PUBLIC_SELECT_SQL},
+         (SELECT wb.amount FROM bids wb WHERE wb.id = auc.winning_bid_id) AS admin_winning_bid_amount
        FROM listings l
        ${LISTING_IDENTITY_JOINS}
        ${LISTING_STORAGE_JOIN}
@@ -575,9 +615,113 @@ function fetchAdminListingRowById(pool, id) {
        LEFT JOIN cities city ON l.city_id = city.id
        LEFT JOIN areas area ON l.area_id = area.id
        LEFT JOIN admins moderator ON l.moderated_by_admin_id = moderator.id
+       ${AUCTION_JOIN_SQL}
        WHERE l.id = $1`,
     [id]
   );
+}
+
+/**
+ * Customer My Bids — listings the authenticated user has bid on.
+ * Includes live, completed, cancelled, and hidden history. Excludes deleted.
+ */
+function fetchCustomerMyBids(pool, bidderId, { limit, offset } = {}) {
+  const paging = parseCustomerListPaging({ limit, offset });
+  const fetchLimit = paging.limit + 1;
+
+  return pool.query(
+    `SELECT
+        l.*,
+        ${LISTING_MODEL_NAME_SQL} as model_name,
+        m.category_id,
+        ${LISTING_BRAND_NAME_SQL} as brand_name,
+        s.capacity_gb,
+        ${LISTING_STORAGE_DISPLAY_SQL} as storage_display,
+        ${LISTING_COLOR_SELECT_FIELDS},
+        cond.name as condition_name,
+        ${LISTING_WATCH_SELECT_FIELDS},
+        u.first_name,
+        u.last_name,
+        city.name_en as city_name,
+        area.name_en as area_name,
+        ${THUMBNAIL_SQL} as thumbnail_image,
+        ${AUCTION_PUBLIC_SELECT_SQL},
+        mine.my_bid_count AS auc_my_bid_count,
+        mine.my_highest_bid AS auc_my_highest_bid,
+        EXISTS (
+          SELECT 1
+          FROM bids wb
+          WHERE wb.id = auc.winning_bid_id
+            AND wb.bidder_id = $1
+        ) AS auc_is_winner
+       FROM listings l
+       ${LISTING_IDENTITY_JOINS}
+       ${LISTING_STORAGE_JOIN}
+       ${LISTING_COLOR_JOINS}
+       JOIN conditions cond ON l.condition_id = cond.id
+       ${LISTING_WATCH_JOINS}
+       JOIN users u ON l.user_id = u.id
+       LEFT JOIN cities city ON l.city_id = city.id
+       LEFT JOIN areas area ON l.area_id = area.id
+       ${AUCTION_INNER_JOIN_SQL}
+       JOIN LATERAL (
+         SELECT
+           COUNT(*)::int AS my_bid_count,
+           MAX(b.amount) AS my_highest_bid,
+           MAX(b.created_at) AS my_last_bid_at
+         FROM bids b
+         WHERE b.listing_id = l.id
+           AND b.auction_id = auc.id
+           AND b.bidder_id = $1
+       ) mine ON mine.my_bid_count > 0
+       WHERE l.status <> '${LISTING_STATUS.DELETED}'
+       ORDER BY CASE WHEN auc.auction_status = 'live' THEN 0 ELSE 1 END,
+                mine.my_last_bid_at DESC NULLS LAST,
+                l.id DESC
+       LIMIT $2 OFFSET $3`,
+    [bidderId, fetchLimit, paging.offset]
+  ).then((result) => ({ rows: result.rows, limit: paging.limit, offset: paging.offset }));
+}
+
+/**
+ * Customer Received Bids — owned Bid listings that have at least one bid.
+ * Includes live and historical auctions. Excludes deleted. Revision tips only.
+ */
+function fetchCustomerReceivedBids(pool, ownerId, { limit, offset } = {}) {
+  const paging = parseCustomerListPaging({ limit, offset });
+  const fetchLimit = paging.limit + 1;
+
+  return pool.query(
+    `SELECT
+        l.*,
+        ${LISTING_MODEL_NAME_SQL} as model_name,
+        m.category_id,
+        ${LISTING_BRAND_NAME_SQL} as brand_name,
+        s.capacity_gb,
+        ${LISTING_STORAGE_DISPLAY_SQL} as storage_display,
+        ${LISTING_COLOR_SELECT_FIELDS},
+        cond.name as condition_name,
+        ${LISTING_WATCH_SELECT_FIELDS},
+        ${THUMBNAIL_SQL} as thumbnail_image,
+        ${AUCTION_PUBLIC_SELECT_SQL}
+       FROM listings l
+       ${LISTING_IDENTITY_JOINS}
+       ${LISTING_STORAGE_JOIN}
+       ${LISTING_COLOR_JOINS}
+       JOIN conditions cond ON l.condition_id = cond.id
+       ${LISTING_WATCH_JOINS}
+       ${AUCTION_INNER_JOIN_SQL}
+       WHERE l.user_id = $1
+         AND l.sale_type = 'bid'
+         AND l.status <> '${LISTING_STATUS.DELETED}'
+         AND ${LISTING_IS_TIP_SQL}
+         AND COALESCE(auc_bids.bid_count, 0) > 0
+       ORDER BY CASE WHEN auc.auction_status = 'live' THEN 0 ELSE 1 END,
+                l.updated_at DESC,
+                l.id DESC
+       LIMIT $2 OFFSET $3`,
+    [ownerId, fetchLimit, paging.offset]
+  ).then((result) => ({ rows: result.rows, limit: paging.limit, offset: paging.offset }));
 }
 
 module.exports = {
@@ -588,4 +732,6 @@ module.exports = {
   fetchListingRowAfterWrite,
   fetchAdminListingList,
   fetchAdminListingRowById,
+  fetchCustomerMyBids,
+  fetchCustomerReceivedBids,
 };

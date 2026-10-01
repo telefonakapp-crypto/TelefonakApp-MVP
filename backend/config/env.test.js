@@ -15,9 +15,11 @@ const CUSTOMER = 'test-only-customer-jwt-secret-aaaaaaaa';
 const ADMIN = 'test-only-admin-jwt-secret-bbbbbbbbbbbb';
 const SHARED = 'test-only-shared-jwt-secret-cccccccccc';
 const OTP_PEPPER = 'test-only-otp-pepper-dddddddddddd';
-const TWILIO_SID = 'ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const TWILIO_TOKEN = 'test_twilio_auth_token_xx';
-const TWILIO_FROM = '+15005550006';
+const SMS_API_URL = 'https://sms.thecaptainjo.com:8445/websmpp/websms';
+const SMS_USERNAME = 'Telefonak';
+const SMS_PASSWORD = 'test-sms-password-not-real';
+const SMS_SENDER_ID = 'Telefonak';
+const SMS_TYPE = '3';
 
 function runValidate(envOverrides) {
   const script = `
@@ -42,9 +44,11 @@ function runValidate(envOverrides) {
     JWT_ADMIN_SECRET: '',
     JWT_SECRET: '',
     OTP_PEPPER: OTP_PEPPER,
-    TWILIO_ACCOUNT_SID: TWILIO_SID,
-    TWILIO_AUTH_TOKEN: TWILIO_TOKEN,
-    TWILIO_PHONE_NUMBER: TWILIO_FROM,
+    SMS_API_URL,
+    SMS_USERNAME,
+    SMS_PASSWORD,
+    SMS_SENDER_ID,
+    SMS_TYPE,
     TEST_OTP_BYPASS_ENABLED: '',
     TEST_OTP_PHONE: '',
     TEST_OTP_CODE: '',
@@ -75,7 +79,7 @@ function assertNoSecretLeak(output) {
   assert.equal(output.includes(CUSTOMER), false);
   assert.equal(output.includes(ADMIN), false);
   assert.equal(output.includes(SHARED), false);
-  assert.equal(output.includes(TWILIO_TOKEN), false);
+  assert.equal(output.includes(SMS_PASSWORD), false);
   assert.equal(output.includes(OTP_PEPPER), false);
 }
 
@@ -162,94 +166,114 @@ describe('JWT secret production startup validation', () => {
   });
 });
 
-describe('Twilio production startup validation', () => {
+describe('SMS provider production startup validation', () => {
   const productionJwt = {
     JWT_CUSTOMER_SECRET: CUSTOMER,
     JWT_ADMIN_SECRET: ADMIN,
   };
+  const noSms = {
+    SMS_API_URL: '',
+    SMS_USERNAME: '',
+    SMS_PASSWORD: '',
+    SMS_SENDER_ID: '',
+    SMS_TYPE: '',
+  };
 
-  it('A. production + all required Twilio variables present → PASS', () => {
+  it('A. production + all required SMS variables present → PASS', () => {
     const result = runValidate({
       ...productionJwt,
-      TWILIO_ACCOUNT_SID: TWILIO_SID,
-      TWILIO_AUTH_TOKEN: TWILIO_TOKEN,
-      TWILIO_PHONE_NUMBER: TWILIO_FROM,
     });
     assert.equal(result.ok, true);
     assertNoSecretLeak(result.message);
   });
 
-  it('B. production + missing Twilio Account SID → FAIL', () => {
+  it('production fails startup when SMS_API_URL is missing', () => {
     const result = runValidate({
       ...productionJwt,
-      TWILIO_ACCOUNT_SID: '',
+      SMS_API_URL: '',
     });
     assert.equal(result.ok, false);
-    assert.match(result.message, /TWILIO_ACCOUNT_SID/);
+    assert.match(result.message, /SMS_API_URL/);
     assertNoSecretLeak(result.message);
   });
 
-  it('C. production + missing Twilio Auth Token → FAIL', () => {
+  it('production fails startup when SMS_USERNAME is missing', () => {
     const result = runValidate({
       ...productionJwt,
-      TWILIO_AUTH_TOKEN: '',
+      SMS_USERNAME: '',
     });
     assert.equal(result.ok, false);
-    assert.match(result.message, /TWILIO_AUTH_TOKEN/);
+    assert.match(result.message, /SMS_USERNAME/);
     assertNoSecretLeak(result.message);
   });
 
-  it('D. production + missing Twilio phone/from number → FAIL', () => {
+  it('production fails startup when SMS_PASSWORD is missing', () => {
     const result = runValidate({
       ...productionJwt,
-      TWILIO_PHONE_NUMBER: '',
+      SMS_PASSWORD: '',
     });
     assert.equal(result.ok, false);
-    assert.match(result.message, /TWILIO_PHONE_NUMBER/);
+    assert.match(result.message, /SMS_PASSWORD/);
     assertNoSecretLeak(result.message);
   });
 
-  it('E. production + all Twilio variables missing → FAIL', () => {
+  it('production fails startup when SMS_SENDER_ID is missing', () => {
     const result = runValidate({
       ...productionJwt,
-      TWILIO_ACCOUNT_SID: '',
-      TWILIO_AUTH_TOKEN: '',
-      TWILIO_PHONE_NUMBER: '',
+      SMS_SENDER_ID: '',
     });
     assert.equal(result.ok, false);
-    assert.match(result.message, /TWILIO_ACCOUNT_SID/);
-    assert.match(result.message, /TWILIO_AUTH_TOKEN/);
-    assert.match(result.message, /TWILIO_PHONE_NUMBER/);
+    assert.match(result.message, /SMS_SENDER_ID/);
     assertNoSecretLeak(result.message);
   });
 
-  it('F. development + Twilio variables missing → allowed', () => {
+  it('production fails startup when SMS_TYPE is missing', () => {
+    const result = runValidate({
+      ...productionJwt,
+      SMS_TYPE: '',
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.message, /SMS_TYPE/);
+    assertNoSecretLeak(result.message);
+  });
+
+  it('production fails startup when SMS_TYPE is invalid', () => {
+    const result = runValidate({
+      ...productionJwt,
+      SMS_TYPE: 'abc',
+    });
+    assert.equal(result.ok, false);
+    assert.match(result.message, /SMS_TYPE/);
+    assertNoSecretLeak(result.message);
+  });
+
+  it('development + SMS variables missing → allowed', () => {
     const result = runValidate({
       NODE_ENV: 'development',
       JWT_CUSTOMER_SECRET: '',
       JWT_ADMIN_SECRET: '',
       JWT_SECRET: SHARED,
-      TWILIO_ACCOUNT_SID: '',
-      TWILIO_AUTH_TOKEN: '',
-      TWILIO_PHONE_NUMBER: '',
+      ...noSms,
     });
     assert.equal(result.ok, true);
     assertNoSecretLeak(result.message);
   });
 
-  it('production placeholder Twilio values are rejected', () => {
+  it('production placeholder SMS values are rejected', () => {
     const result = runValidate({
       ...productionJwt,
-      TWILIO_ACCOUNT_SID: 'your_twilio_account_sid',
-      TWILIO_AUTH_TOKEN: 'your_twilio_auth_token',
-      TWILIO_PHONE_NUMBER: 'your_twilio_phone_number',
+      SMS_API_URL: 'your_sms_api_url',
+      SMS_USERNAME: 'your_sms_username',
+      SMS_PASSWORD: 'changeme',
+      SMS_SENDER_ID: 'example-sender',
+      SMS_TYPE: '3',
     });
     assert.equal(result.ok, false);
-    assert.match(result.message, /TWILIO_/);
+    assert.match(result.message, /SMS_/);
     assertNoSecretLeak(result.message);
   });
 
-  it('production server.js exits before listen when Twilio is missing', () => {
+  it('production server.js exits before listen when SMS config is missing', () => {
     const env = {
       PATH: process.env.PATH,
       HOME: process.env.HOME || '',
@@ -263,9 +287,7 @@ describe('Twilio production startup validation', () => {
       JWT_ADMIN_SECRET: ADMIN,
       JWT_SECRET: '',
       OTP_PEPPER: OTP_PEPPER,
-      TWILIO_ACCOUNT_SID: '',
-      TWILIO_AUTH_TOKEN: '',
-      TWILIO_PHONE_NUMBER: '',
+      ...noSms,
       TEST_OTP_BYPASS_ENABLED: '',
       TEST_OTP_PHONE: '',
       TEST_OTP_CODE: '',
@@ -282,12 +304,12 @@ describe('Twilio production startup validation', () => {
     const output = `${result.stdout || ''}\n${result.stderr || ''}`;
     assert.notEqual(result.status, 0);
     assert.doesNotMatch(output, /Server is running/);
-    assert.match(output, /TWILIO_/);
+    assert.match(output, /SMS_/);
     assertNoSecretLeak(output);
   });
 });
 
-describe('TEST_OTP bypass production Twilio exemption', () => {
+describe('TEST_OTP bypass production SMS exemption', () => {
   const productionJwt = {
     JWT_CUSTOMER_SECRET: CUSTOMER,
     JWT_ADMIN_SECRET: ADMIN,
@@ -295,12 +317,14 @@ describe('TEST_OTP bypass production Twilio exemption', () => {
   const validBypassPhone = '0790000111';
   const validBypassCode = '9999';
 
-  it('A. production + valid bypass + no Twilio credentials → PASS', () => {
+  it('A. production + valid bypass + no SMS credentials → PASS', () => {
     const result = runValidate({
       ...productionJwt,
-      TWILIO_ACCOUNT_SID: '',
-      TWILIO_AUTH_TOKEN: '',
-      TWILIO_PHONE_NUMBER: '',
+      SMS_API_URL: '',
+      SMS_USERNAME: '',
+      SMS_PASSWORD: '',
+      SMS_SENDER_ID: '',
+      SMS_TYPE: '',
       TEST_OTP_BYPASS_ENABLED: 'true',
       TEST_OTP_PHONE: validBypassPhone,
       TEST_OTP_CODE: validBypassCode,
@@ -309,29 +333,33 @@ describe('TEST_OTP bypass production Twilio exemption', () => {
     assertNoSecretLeak(result.message);
   });
 
-  it('B. production + bypass disabled + missing Twilio → FAIL', () => {
+  it('B. production + bypass disabled + missing SMS config → FAIL', () => {
     const result = runValidate({
       ...productionJwt,
-      TWILIO_ACCOUNT_SID: '',
-      TWILIO_AUTH_TOKEN: '',
-      TWILIO_PHONE_NUMBER: '',
+      SMS_API_URL: '',
+      SMS_USERNAME: '',
+      SMS_PASSWORD: '',
+      SMS_SENDER_ID: '',
+      SMS_TYPE: '',
       TEST_OTP_BYPASS_ENABLED: 'false',
       TEST_OTP_PHONE: validBypassPhone,
       TEST_OTP_CODE: validBypassCode,
     });
     assert.equal(result.ok, false);
-    assert.match(result.message, /TWILIO_ACCOUNT_SID/);
-    assert.match(result.message, /TWILIO_AUTH_TOKEN/);
-    assert.match(result.message, /TWILIO_PHONE_NUMBER/);
+    assert.match(result.message, /SMS_API_URL/);
+    assert.match(result.message, /SMS_USERNAME/);
+    assert.match(result.message, /SMS_PASSWORD/);
     assertNoSecretLeak(result.message);
   });
 
-  it('C. production + ENABLED=true with invalid bypass config → FAIL (does not silently skip Twilio validation)', () => {
+  it('C. production + ENABLED=true with invalid bypass config → FAIL (does not silently skip SMS validation)', () => {
     const result = runValidate({
       ...productionJwt,
-      TWILIO_ACCOUNT_SID: '',
-      TWILIO_AUTH_TOKEN: '',
-      TWILIO_PHONE_NUMBER: '',
+      SMS_API_URL: '',
+      SMS_USERNAME: '',
+      SMS_PASSWORD: '',
+      SMS_SENDER_ID: '',
+      SMS_TYPE: '',
       TEST_OTP_BYPASS_ENABLED: 'true',
       TEST_OTP_PHONE: 'not-a-phone',
       TEST_OTP_CODE: validBypassCode,
@@ -345,9 +373,11 @@ describe('TEST_OTP bypass production Twilio exemption', () => {
     const result = runValidate({
       JWT_CUSTOMER_SECRET: '',
       JWT_ADMIN_SECRET: ADMIN,
-      TWILIO_ACCOUNT_SID: '',
-      TWILIO_AUTH_TOKEN: '',
-      TWILIO_PHONE_NUMBER: '',
+      SMS_API_URL: '',
+      SMS_USERNAME: '',
+      SMS_PASSWORD: '',
+      SMS_SENDER_ID: '',
+      SMS_TYPE: '',
       TEST_OTP_BYPASS_ENABLED: 'true',
       TEST_OTP_PHONE: validBypassPhone,
       TEST_OTP_CODE: validBypassCode,
@@ -389,9 +419,11 @@ describe('Admin access token TTL startup validation', () => {
       JWT_CUSTOMER_SECRET: '',
       JWT_ADMIN_SECRET: '',
       JWT_SECRET: SHARED,
-      TWILIO_ACCOUNT_SID: '',
-      TWILIO_AUTH_TOKEN: '',
-      TWILIO_PHONE_NUMBER: '',
+      SMS_API_URL: '',
+      SMS_USERNAME: '',
+      SMS_PASSWORD: '',
+      SMS_SENDER_ID: '',
+      SMS_TYPE: '',
       ADMIN_ACCESS_TOKEN_TTL: '30d',
     });
     assert.equal(result.ok, true);
@@ -490,9 +522,11 @@ describe('OTP_PEPPER production startup validation', () => {
       JWT_CUSTOMER_SECRET: CUSTOMER,
       JWT_ADMIN_SECRET: ADMIN,
       JWT_SECRET: SHARED,
-      TWILIO_ACCOUNT_SID: '',
-      TWILIO_AUTH_TOKEN: '',
-      TWILIO_PHONE_NUMBER: '',
+      SMS_API_URL: '',
+      SMS_USERNAME: '',
+      SMS_PASSWORD: '',
+      SMS_SENDER_ID: '',
+      SMS_TYPE: '',
       OTP_PEPPER: '',
     });
     assert.equal(result.ok, true);
@@ -534,9 +568,11 @@ describe('OTP_PEPPER hashing', () => {
       JWT_ADMIN_SECRET: ADMIN,
       JWT_SECRET: SHARED,
       OTP_PEPPER,
-      TWILIO_ACCOUNT_SID: TWILIO_SID,
-      TWILIO_AUTH_TOKEN: TWILIO_TOKEN,
-      TWILIO_PHONE_NUMBER: TWILIO_FROM,
+      SMS_API_URL,
+      SMS_USERNAME,
+      SMS_PASSWORD,
+      SMS_SENDER_ID,
+      SMS_TYPE,
       ADMIN_ACCESS_TOKEN_TTL: '8h',
       ...envOverrides,
     };

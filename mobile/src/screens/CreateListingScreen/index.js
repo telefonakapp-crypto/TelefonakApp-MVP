@@ -59,6 +59,16 @@ import {
 } from '../../utils/batteryPercentage';
 import { fonts, radii, space, ambientElevation } from '../../utils/designTokens';
 import {
+  LISTING_SALE_TYPE,
+  DEFAULT_LISTING_SALE_TYPE,
+  isBidSaleType,
+  auctionDurationOptions,
+  auctionDurationLabelKey,
+  buildCreateSaleTypeFields,
+  bidDurationIssue,
+  createListingErrorI18nKey,
+} from '../../utils/auctionDuration';
+import {
   FormScreenSkeleton,
   SelectField,
   SearchablePickerSheet,
@@ -111,6 +121,9 @@ export default function CreateListingScreen() {
     area: '',
     city_id: '',
   });
+  const [saleType, setSaleType] = useState(DEFAULT_LISTING_SALE_TYPE);
+  const [durationHours, setDurationHours] = useState(null);
+  const isBidCreate = !isEditMode && isBidSaleType(saleType);
 
   const priceInputRef = useRef(null);
   const batteryInputRef = useRef(null);
@@ -494,6 +507,7 @@ export default function CreateListingScreen() {
       color: 2,
       sim: 2,
       price: 3,
+      duration: 3,
       location: 3,
       images: 3,
     };
@@ -615,12 +629,22 @@ export default function CreateListingScreen() {
     }
     if (currentStep === 3) {
       if (!formData.price || formData.price.trim() === '') {
-        Alert.alert('Error', t('createListing.pleaseEnterPrice'));
+        Alert.alert(
+          'Error',
+          isBidCreate
+            ? t('createListing.startingPriceRequired')
+            : t('createListing.pleaseEnterPrice')
+        );
         return false;
       }
       const priceValue = Number(formData.price);
       if (!Number.isFinite(priceValue) || priceValue < 0.01) {
         Alert.alert('Error', 'Please enter a valid price greater than 0');
+        return false;
+      }
+      const durationIssue = bidDurationIssue(saleType, durationHours);
+      if (!isEditMode && durationIssue) {
+        Alert.alert('Error', t(`createListing.${durationIssue}`));
         return false;
       }
       if (!formData.city_id) {
@@ -745,7 +769,12 @@ export default function CreateListingScreen() {
     }
 
     if (!formData.price || formData.price.trim() === '') {
-      Alert.alert('Error', 'Please enter a price');
+      Alert.alert(
+        'Error',
+        isBidCreate
+          ? t('createListing.startingPriceRequired')
+          : t('createListing.pleaseEnterPrice')
+      );
       goToField('price');
       setTimeout(() => priceInputRef.current?.focus(), 300);
       return;
@@ -756,6 +785,13 @@ export default function CreateListingScreen() {
       Alert.alert('Error', 'Please enter a valid price greater than 0');
       goToField('price');
       setTimeout(() => priceInputRef.current?.focus(), 300);
+      return;
+    }
+
+    const durationIssue = bidDurationIssue(saleType, durationHours);
+    if (!isEditMode && durationIssue) {
+      Alert.alert('Error', t(`createListing.${durationIssue}`));
+      goToField('duration');
       return;
     }
 
@@ -888,6 +924,7 @@ export default function CreateListingScreen() {
           description: formData.description || null,
           ...locationFields,
           images: imageUrls,
+          ...buildCreateSaleTypeFields({ saleType, durationHours }),
         },
         { headers: { Authorization: `Bearer ${token}` } }
       );
@@ -915,9 +952,12 @@ export default function CreateListingScreen() {
             : getApiErrorMessage(error, t('editListing.updateFailed'))
         );
       } else {
+        const bidErrorKey = createListingErrorI18nKey(error);
         Alert.alert(
           t('common.error'),
-          getApiErrorMessage(error, t('createListing.createFailed'))
+          bidErrorKey
+            ? t(bidErrorKey)
+            : getApiErrorMessage(error, t('createListing.createFailed'))
         );
       }
     } finally {
@@ -1023,6 +1063,14 @@ export default function CreateListingScreen() {
       })),
     [cities, language]
   );
+  const durationOptions = useMemo(
+    () =>
+      auctionDurationOptions().map((item) => ({
+        id: item.id,
+        label: t(item.labelKey),
+      })),
+    [language, t]
+  );
 
   if (fetching) {
     return (
@@ -1051,7 +1099,9 @@ export default function CreateListingScreen() {
       ? t('createListing.heroSubtitle') || 'Select the device you want to list.'
       : step === 2
         ? t('createListing.detailsSubtitle') || 'Tell buyers about the condition and specs.'
-        : t('createListing.listingSubtitle') || 'Add price, location, and photos.';
+        : isBidCreate
+          ? t('createListing.listingSubtitleBid')
+          : t('createListing.listingSubtitle') || 'Add price, location, and photos.';
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top']}>
@@ -1085,6 +1135,7 @@ export default function CreateListingScreen() {
           <View style={styles.stack}>
             <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
               {t('createListing.category') || 'Category'}
+              <Text style={styles.requiredAsterisk}> *</Text>
             </Text>
             <View style={[styles.categoryRow, getFlexDirection(isRTL, 'row')]}>
               {categories.map((cat) => {
@@ -1136,6 +1187,7 @@ export default function CreateListingScreen() {
               <>
                 <SelectField
                   label={t('createListing.brand')}
+                  required
                   value={selectedBrandLabel}
                   placeholder={t('createListing.selectBrand') || 'Select a brand'}
                   onPress={() => setActiveSheet('brand')}
@@ -1147,7 +1199,8 @@ export default function CreateListingScreen() {
                     </Text>
                     <View>
                       <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-                        {t('createListing.brand')} *
+                        {t('createListing.brand')}
+                        <Text style={styles.requiredAsterisk}> *</Text>
                       </Text>
                       <TextInput
                         style={[styles.batteryInput, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }, ambientElevation]}
@@ -1159,7 +1212,8 @@ export default function CreateListingScreen() {
                     </View>
                     <View>
                       <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-                        {t('createListing.model')} *
+                        {t('createListing.model')}
+                        <Text style={styles.requiredAsterisk}> *</Text>
                       </Text>
                       <TextInput
                         style={[styles.batteryInput, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }, ambientElevation]}
@@ -1173,7 +1227,8 @@ export default function CreateListingScreen() {
                       <>
                         <View>
                           <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-                            {t('createListing.caseSize')} *
+                            {t('createListing.caseSize')}
+                            <Text style={styles.requiredAsterisk}> *</Text>
                           </Text>
                           <TextInput
                             style={[styles.batteryInput, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }, ambientElevation]}
@@ -1185,7 +1240,8 @@ export default function CreateListingScreen() {
                         </View>
                         <View>
                           <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-                            {t('createListing.connectivity')} *
+                            {t('createListing.connectivity')}
+                            <Text style={styles.requiredAsterisk}> *</Text>
                           </Text>
                           <TextInput
                             style={[styles.batteryInput, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }, ambientElevation]}
@@ -1211,7 +1267,8 @@ export default function CreateListingScreen() {
                     ) : (
                       <View>
                         <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-                          {t('createListing.storage')} *
+                          {t('createListing.storage')}
+                          <Text style={styles.requiredAsterisk}> *</Text>
                         </Text>
                         <TextInput
                           style={[styles.batteryInput, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }, ambientElevation]}
@@ -1227,6 +1284,7 @@ export default function CreateListingScreen() {
                   <>
                 <SelectField
                   label={t('createListing.model')}
+                  required
                   value={selectedModelLabel}
                   placeholder={
                     selectedBrandId
@@ -1252,6 +1310,7 @@ export default function CreateListingScreen() {
                     ) : null}
                     <SelectField
                       label={t('createListing.caseSize')}
+                      required
                       value={
                         formData.model_id && loadingWatchOptions
                           ? t('common.loading') || 'Loading…'
@@ -1274,6 +1333,7 @@ export default function CreateListingScreen() {
                     />
                     <SelectField
                       label={t('createListing.connectivity')}
+                      required
                       value={
                         formData.model_id && loadingWatchOptions
                           ? t('common.loading') || 'Loading…'
@@ -1297,6 +1357,7 @@ export default function CreateListingScreen() {
                     {showWatchStorage ? (
                       <SelectField
                         label={t('createListing.storage')}
+                        required
                         value={
                           formData.model_id && loadingWatchOptions
                             ? t('common.loading') || 'Loading…'
@@ -1311,6 +1372,7 @@ export default function CreateListingScreen() {
                 ) : (
                   <SelectField
                     label={t('createListing.storage')}
+                    required
                     value={
                       formData.model_id && loadingModelOptions
                         ? t('common.loading') || 'Loading…'
@@ -1340,6 +1402,7 @@ export default function CreateListingScreen() {
           <View style={styles.stack}>
             <SelectField
               label={t('createListing.condition')}
+              required
               value={localizeCondition(selectedCondition)}
               placeholder={t('createListing.selectCondition') || 'Select condition'}
               onPress={() => setActiveSheet('condition')}
@@ -1347,7 +1410,8 @@ export default function CreateListingScreen() {
             {shouldShowBatteryPercentage ? (
               <View>
                 <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-                  {t('createListing.batteryPercentage')} *
+                  {t('createListing.batteryPercentage')}
+                  <Text style={styles.requiredAsterisk}> *</Text>
                 </Text>
                 <TextInput
                   ref={batteryInputRef}
@@ -1377,7 +1441,8 @@ export default function CreateListingScreen() {
               <>
                 <View>
                   <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-                    {isSmartwatch ? t('createListing.colorFinish') : t('createListing.color')} *
+                    {isSmartwatch ? t('createListing.colorFinish') : t('createListing.color')}
+                    <Text style={styles.requiredAsterisk}> *</Text>
                   </Text>
                   <TextInput
                     style={[styles.batteryInput, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }, ambientElevation]}
@@ -1390,7 +1455,8 @@ export default function CreateListingScreen() {
                 {!isSmartwatch ? (
                   <View>
                     <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-                      {t('createListing.simConfiguration')} *
+                      {t('createListing.simConfiguration')}
+                      <Text style={styles.requiredAsterisk}> *</Text>
                     </Text>
                     <TextInput
                       style={[styles.batteryInput, { backgroundColor: colors.surface, color: colors.text, borderColor: colors.border }, ambientElevation]}
@@ -1406,6 +1472,7 @@ export default function CreateListingScreen() {
               <>
                 <SelectField
                   label={isSmartwatch ? t('createListing.colorFinish') : t('createListing.color')}
+                  required
                   value={
                     formData.model_id && loadingDependentOptions
                       ? t('common.loading') || 'Loading…'
@@ -1432,6 +1499,7 @@ export default function CreateListingScreen() {
                 {!isSmartwatch ? (
                   <SelectField
                     label={t('createListing.simConfiguration')}
+                    required
                     value={selectedSimLabel}
                     placeholder={t('createListing.selectSim') || 'Select SIM'}
                     onPress={() => setActiveSheet('sim')}
@@ -1444,9 +1512,91 @@ export default function CreateListingScreen() {
 
         {step === 3 && (
           <View style={styles.stack}>
+            {isEditMode ? null : (
+              <View>
+                <Text
+                  style={[
+                    styles.fieldLabel,
+                    { color: colors.text },
+                    getTextAlign(isRTL, 'auto'),
+                  ]}
+                >
+                  {t('createListing.saleType')}
+                </Text>
+                <View
+                  style={[
+                    styles.saleTypeTrack,
+                    { backgroundColor: colors.surfaceContainerLow },
+                    getFlexDirection(isRTL, 'row'),
+                  ]}
+                >
+                  <TouchableOpacity
+                    style={[
+                      styles.saleTypeSegment,
+                      saleType === LISTING_SALE_TYPE.NORMAL && {
+                        backgroundColor: colors.primary,
+                      },
+                    ]}
+                    onPress={() => setSaleType(LISTING_SALE_TYPE.NORMAL)}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('createListing.saleTypeNormal')}
+                    accessibilityState={{ selected: saleType === LISTING_SALE_TYPE.NORMAL }}
+                  >
+                    <Text
+                      style={[
+                        styles.saleTypeLabel,
+                        {
+                          color:
+                            saleType === LISTING_SALE_TYPE.NORMAL
+                              ? colors.onPrimary
+                              : colors.textSecondary,
+                        },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {t('createListing.saleTypeNormal')}
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[
+                      styles.saleTypeSegment,
+                      saleType === LISTING_SALE_TYPE.BID && {
+                        backgroundColor: colors.primary,
+                      },
+                    ]}
+                    onPress={() => setSaleType(LISTING_SALE_TYPE.BID)}
+                    accessibilityRole="button"
+                    accessibilityLabel={t('createListing.saleTypeBid')}
+                    accessibilityState={{ selected: saleType === LISTING_SALE_TYPE.BID }}
+                  >
+                    <Text
+                      style={[
+                        styles.saleTypeLabel,
+                        {
+                          color:
+                            saleType === LISTING_SALE_TYPE.BID
+                              ? colors.onPrimary
+                              : colors.textSecondary,
+                        },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {t('createListing.saleTypeBid')}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
             <View>
-              <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
-                {t('createListing.price')}
+              <Text
+                style={[
+                  styles.fieldLabel,
+                  { color: colors.text },
+                  getTextAlign(isRTL, 'auto'),
+                ]}
+              >
+                {isBidCreate ? t('createListing.startingPrice') : t('createListing.price')}
                 <Text style={styles.requiredAsterisk}> *</Text>
               </Text>
               <TextInput
@@ -1459,6 +1609,7 @@ export default function CreateListingScreen() {
                     borderColor: colors.border,
                   },
                   ambientElevation,
+                  getTextAlign(isRTL, 'auto'),
                 ]}
                 placeholder="0.00"
                 placeholderTextColor={colors.textMuted}
@@ -1468,8 +1619,63 @@ export default function CreateListingScreen() {
               />
             </View>
 
+            {isBidCreate && (
+              <View>
+                <SelectField
+                  label={t('createListing.bidDuration')}
+                  required
+                  value={
+                    durationHours
+                      ? t(auctionDurationLabelKey(durationHours))
+                      : ''
+                  }
+                  placeholder={t('createListing.selectDuration')}
+                  onPress={() => setActiveSheet('duration')}
+                />
+                <View
+                  style={[
+                    styles.bidHelperRow,
+                    getFlexDirection(isRTL, 'row'),
+                  ]}
+                >
+                  <Ionicons
+                    name="information-circle-outline"
+                    size={16}
+                    color={colors.textSecondary}
+                    style={styles.bidHelperIcon}
+                  />
+                  <View style={styles.bidHelperCopy}>
+                    <Text
+                      style={[
+                        styles.bidHelperText,
+                        { color: colors.textSecondary },
+                        getTextAlign(isRTL, 'auto'),
+                      ]}
+                    >
+                      {t('createListing.bidCreateHelper')}
+                    </Text>
+                    <Text
+                      style={[
+                        styles.bidHelperText,
+                        { color: colors.textSecondary },
+                        getTextAlign(isRTL, 'auto'),
+                      ]}
+                    >
+                      {t('createListing.bidCreateHelperApproved')}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            )}
+
             <View>
-              <Text style={[styles.fieldLabel, { color: colors.textSecondary }]}>
+              <Text
+                style={[
+                  styles.fieldLabel,
+                  { color: colors.text },
+                  getTextAlign(isRTL, 'auto'),
+                ]}
+              >
                 {t('createListing.description')}
               </Text>
               <TextInput
@@ -1502,7 +1708,7 @@ export default function CreateListingScreen() {
               <Text
                 style={[
                   styles.fieldLabel,
-                  { color: colors.textSecondary },
+                  { color: colors.text },
                   getTextAlign(isRTL, 'auto'),
                 ]}
               >
@@ -1688,6 +1894,15 @@ export default function CreateListingScreen() {
         onSelect={(item) => handleSelectCity(item.id)}
         searchPlaceholder={t('createListing.searchCities') || 'Search cities'}
       />
+      <SearchablePickerSheet
+        open={activeSheet === 'duration'}
+        onClose={() => setActiveSheet(null)}
+        title={t('createListing.bidDuration')}
+        options={durationOptions}
+        selectedId={durationHours}
+        onSelect={(item) => setDurationHours(Number(item.id))}
+        searchable={false}
+      />
 
     </SafeAreaView>
   );
@@ -1746,6 +1961,39 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginBottom: space[2],
   },
+  saleTypeTrack: {
+    borderRadius: radii.full,
+    padding: 4,
+  },
+  saleTypeSegment: {
+    flex: 1,
+    minHeight: 44,
+    paddingVertical: space[2],
+    paddingHorizontal: space[3],
+    borderRadius: radii.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  saleTypeLabel: {
+    fontFamily: fonts.labelBold,
+    fontSize: 14,
+  },
+  bidHelperRow: {
+    marginTop: space[2],
+    alignItems: 'flex-start',
+    gap: space[2],
+  },
+  bidHelperIcon: {
+    marginTop: 1,
+  },
+  bidHelperCopy: {
+    flex: 1,
+  },
+  bidHelperText: {
+    fontFamily: fonts.body,
+    fontSize: 13,
+    lineHeight: 18,
+  },
   requiredAsterisk: {
     color: '#E53935',
   },
@@ -1788,7 +2036,7 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     minHeight: 56,
-    borderRadius: radii.xl,
+    borderRadius: radii.full,
     alignItems: 'center',
     justifyContent: 'center',
   },

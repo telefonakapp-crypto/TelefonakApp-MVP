@@ -164,11 +164,13 @@ export default function HomeBottomNav({ unreadOffersCount, onSell }) {
 
         <TouchableOpacity
           style={styles.navSlot}
-          onPress={() => navigation.navigate('SavedListings')}
+          onPress={() => navigation.navigate('Bids')}
+          accessibilityRole="button"
+          accessibilityLabel={t('home.bidsNav') || t('bids.myBids') || 'Bids'}
         >
           <View style={styles.navItemInner}>
             <View style={styles.iconSlot}>
-              <Ionicons name="heart-outline" size={22} color={inactiveColor} />
+              <Ionicons name="hammer-outline" size={22} color={inactiveColor} />
             </View>
             <Text
               style={[
@@ -177,7 +179,7 @@ export default function HomeBottomNav({ unreadOffersCount, onSell }) {
                 getTextAlign(isRTL, 'auto'),
               ]}
             >
-              {t('home.savedNav') || t('profile.savedListings') || 'Saved'}
+              {t('home.bidsNav') || t('bids.myBids') || 'Bids'}
             </Text>
           </View>
         </TouchableOpacity>

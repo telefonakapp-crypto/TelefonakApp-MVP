@@ -16,6 +16,7 @@ export type MarketplaceUserListItem = {
 export type MarketplaceUserDetail = MarketplaceUserListItem & {
   gender?: string | null;
   city?: string | null;
+  date_of_birth?: string | null;
   updated_at?: string;
   active_listings: number;
   sold_listings: number;

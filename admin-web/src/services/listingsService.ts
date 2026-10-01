@@ -17,6 +17,8 @@ export async function fetchListings(
       status: params.status || undefined,
       brand: params.brand || undefined,
       seller: params.seller || undefined,
+      seller_id: params.seller_id || undefined,
+      sale_type: params.sale_type || undefined,
     },
   });
   return data;

@@ -9,6 +9,7 @@
  *   updated → approved | declined
  *   approved → declined   (admin policy revoke; same row, no revision)
  *   approved → updated    (seller edits a live listing; awaits moderation)
+ *   approved → bid_duration_ended  (automatic Bid auction duration completion)
  *   approved ⇄ hidden   (seller hides / unhides their own listing)
  *
  * Declined is terminal for that snapshot. Editing a declined tip inserts a new
@@ -21,8 +22,9 @@
  *   resubmitted stays resubmitted (in-place)
  *   updated stays updated (in-place)
  *
- * sold and deleted are terminal: nothing moves a listing out of them, which is
- * what makes "mark as sold" permanent.
+ * sold, deleted, and bid_duration_ended are terminal: nothing moves a listing
+ * out of them, which is what makes "mark as sold" and automatic Bid completion
+ * historical rather than editable.
  *
  * PUBLIC_LISTING_STATUSES is the one definition of "a buyer may see this",
  * so a new status is invisible to the marketplace, search, favorites, view
@@ -40,6 +42,7 @@ const LISTING_STATUS = {
   SOLD: 'sold',
   HIDDEN: 'hidden',
   DELETED: 'deleted',
+  BID_DURATION_ENDED: 'bid_duration_ended',
 };
 
 // A live listing is the only thing a buyer may reach. Sold listings leave the
@@ -47,7 +50,11 @@ const LISTING_STATUS = {
 const PUBLIC_LISTING_STATUSES = [LISTING_STATUS.APPROVED];
 
 // Statuses no transition may leave. Guards moderation against reopening a deal.
-const TERMINAL_LISTING_STATUSES = [LISTING_STATUS.SOLD, LISTING_STATUS.DELETED];
+const TERMINAL_LISTING_STATUSES = [
+  LISTING_STATUS.SOLD,
+  LISTING_STATUS.DELETED,
+  LISTING_STATUS.BID_DURATION_ENDED,
+];
 
 // Awaiting admin review (brand-new, declined re-submit, or approved edit).
 const MODERATION_QUEUE_STATUSES = [

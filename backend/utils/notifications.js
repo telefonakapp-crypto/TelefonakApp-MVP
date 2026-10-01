@@ -23,6 +23,7 @@ const NOTIFICATION_TYPES = {
   OFFER_RECEIVED: 'offer_received',
   OFFER_ACCEPTED: 'offer_accepted',
   OFFER_REJECTED: 'offer_rejected',
+  BID_ONE_HOUR_REMAINING: 'bid_one_hour_remaining',
   SYSTEM: 'system',
 };
 
@@ -244,6 +245,16 @@ function notifyListingActive(pool, { userId, listingId, deviceName }) {
   });
 }
 
+function notifyAuctionOneHourRemaining(pool, { userId, listingId, deviceName }) {
+  return safeCreateNotification(pool, {
+    userId,
+    relatedListingId: listingId,
+    type: NOTIFICATION_TYPES.BID_ONE_HOUR_REMAINING,
+    title: 'Bid ending soon',
+    message: `Your Bid listing ${describeListing(deviceName)} has about 1 hour remaining. You can view bidders, extend once, or end the bid.`,
+  });
+}
+
 /** "600" for 600.00, "600.50" for 600.50 — prices read better without dead decimals. */
 function formatPrice(price) {
   const numeric = Number(price);
@@ -396,6 +407,7 @@ module.exports = {
   notifyListingSold,
   notifyListingHidden,
   notifyListingActive,
+  notifyAuctionOneHourRemaining,
   notifyOfferReceived,
   notifyOfferAccepted,
   notifyOfferRejected,

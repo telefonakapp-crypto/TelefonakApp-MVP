@@ -9,6 +9,14 @@ import {
 import { ListingStatusBadge } from './ListingStatusBadge';
 import { ConfirmModal } from './ConfirmModal';
 import { getListingDisplayName } from '../../utils/listingDisplayName';
+import type { AdminListingAuction } from '../../types/listing';
+import {
+  auctionStatusLabel,
+  completionSourceLabel,
+  formatAdminDateTime,
+  formatAdminMoney,
+  saleTypeLabel,
+} from '../../utils/auctionDisplay';
 import { useAuth } from '../../hooks/useAuth';
 import { PERMISSIONS } from '../../auth/permissions';
 
@@ -496,6 +504,10 @@ export function ListingDetailDrawer({
                   )}
                 </dl>
 
+                {listing.sale_type === 'bid' ? (
+                  <AuctionDetails auction={listing.auction} />
+                ) : null}
+
                 <div>
                   <p className="text-xs font-medium uppercase tracking-wide text-slate-500">
                     Description
@@ -644,6 +656,61 @@ export function ListingDetailDrawer({
         }}
       />
     </>
+  );
+}
+
+function AuctionDetails({ auction }: { auction: AdminListingAuction | null | undefined }) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+      <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Auction</p>
+      {!auction ? (
+        <p className="mt-2 text-sm text-slate-600">Auction details are unavailable.</p>
+      ) : (
+        <dl className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <DetailField label="Sale type" value={saleTypeLabel('bid')} />
+          <DetailField label="Auction status" value={auctionStatusLabel(auction.auction_status)} />
+          <DetailField label="Starting price" value={formatAdminMoney(auction.starting_price) || '—'} />
+          <DetailField
+            label="Current highest bid"
+            value={formatAdminMoney(auction.current_highest_bid) || 'No bids yet'}
+          />
+          {auction.auction_status === 'live' ? (
+            <DetailField
+              label="Minimum next bid"
+              value={formatAdminMoney(auction.minimum_next_bid) || '—'}
+            />
+          ) : null}
+          {auction.auction_status === 'live' ? (
+            <DetailField label="Maximum bid" value={formatAdminMoney(auction.maximum_bid) || '—'} />
+          ) : null}
+          <DetailField label="Total bids" value={String(auction.bid_count)} />
+          <DetailField
+            label="Duration"
+            value={auction.duration_hours != null ? `${auction.duration_hours} hours` : '—'}
+          />
+          <DetailField label="Start time" value={formatAdminDateTime(auction.starts_at)} />
+          <DetailField label="Original end time" value={formatAdminDateTime(auction.original_ends_at)} />
+          <DetailField label="Current end time" value={formatAdminDateTime(auction.ends_at)} />
+          <DetailField label="Extension used" value={auction.extension_used ? 'Yes' : 'No'} />
+          {auction.winning_bid_id != null ? (
+            <DetailField
+              label="Winning bid"
+              value={
+                auction.winning_bid_amount
+                  ? `${formatAdminMoney(auction.winning_bid_amount)} · #${auction.winning_bid_id}`
+                  : `#${auction.winning_bid_id}`
+              }
+            />
+          ) : null}
+          {completionSourceLabel(auction.completion_source) ? (
+            <DetailField
+              label="Completion source"
+              value={completionSourceLabel(auction.completion_source) || '—'}
+            />
+          ) : null}
+        </dl>
+      )}
+    </div>
   );
 }
 

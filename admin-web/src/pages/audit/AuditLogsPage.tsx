@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchAuditLogDetail, fetchAuditLogs } from '../../services/auditService';
 import type { AuditLogItem } from '../../types/audit';
+import { NumberedPagination } from '../../components/pagination/NumberedPagination';
 
 type FiltersState = {
   search: string;
@@ -225,28 +226,12 @@ export function AuditLogsPage() {
                 Page {pagination.page} of {pagination.totalPages} ·{' '}
                 {pagination.totalItems.toLocaleString()} events
               </p>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={page <= 1 || logsQuery.isFetching}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  disabled={
-                    !pagination.totalPages ||
-                    page >= pagination.totalPages ||
-                    logsQuery.isFetching
-                  }
-                  onClick={() => setPage((p) => p + 1)}
-                  className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Next
-                </button>
-              </div>
+              <NumberedPagination
+                page={page}
+                totalPages={pagination.totalPages}
+                onPageChange={setPage}
+                disabled={logsQuery.isFetching}
+              />
             </div>
           ) : null}
         </>

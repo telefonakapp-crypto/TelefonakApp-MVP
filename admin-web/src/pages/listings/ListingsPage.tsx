@@ -8,12 +8,15 @@ import {
   ListingsTableSkeleton,
 } from '../../components/listings/ListingsTable';
 import { ListingDetailDrawer } from '../../components/listings/ListingDetailDrawer';
+import { NumberedPagination } from '../../components/pagination/NumberedPagination';
 
 type FiltersState = {
   search: string;
   status: string;
   brand: string;
   seller: string;
+  sellerId: string;
+  saleType: string;
 };
 
 const DEFAULT_FILTERS: FiltersState = {
@@ -21,17 +24,31 @@ const DEFAULT_FILTERS: FiltersState = {
   status: '',
   brand: '',
   seller: '',
+  sellerId: '',
+  saleType: '',
 };
+
+function isValidSellerIdInput(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  return /^[1-9]\d*$/.test(trimmed);
+}
+
+function parseListingIdParam(raw: string | null) {
+  if (!raw || !/^[1-9]\d*$/.test(raw)) return null;
+  return Number(raw);
+}
 
 export function ListingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const statusFromUrl = searchParams.get('status') || '';
+  const listingIdFromUrl = parseListingIdParam(searchParams.get('listingId'));
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState<FiltersState>({
     ...DEFAULT_FILTERS,
     status: statusFromUrl,
   });
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(listingIdFromUrl);
   const limit = 20;
 
   useEffect(() => {
@@ -40,6 +57,28 @@ export function ListingsPage() {
     );
     setPage(1);
   }, [statusFromUrl]);
+
+  useEffect(() => {
+    setSelectedId(listingIdFromUrl);
+  }, [listingIdFromUrl]);
+
+  const openListing = useCallback(
+    (id: number) => {
+      setSelectedId(id);
+      const params = new URLSearchParams(searchParams);
+      params.set('listingId', String(id));
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
+
+  const closeListing = useCallback(() => {
+    setSelectedId(null);
+    if (!searchParams.has('listingId')) return;
+    const params = new URLSearchParams(searchParams);
+    params.delete('listingId');
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const handleFilterChange = useCallback((next: Partial<FiltersState>) => {
     setPage(1);
@@ -63,6 +102,9 @@ export function ListingsPage() {
     setSearchParams(params, { replace: true });
   }, [searchParams, setSearchParams]);
 
+  const sellerIdTrimmed = filters.sellerId.trim();
+  const sellerIdInvalid = !isValidSellerIdInput(sellerIdTrimmed);
+
   const queryParams = useMemo(
     () => ({
       page,
@@ -71,8 +113,10 @@ export function ListingsPage() {
       status: filters.status || undefined,
       brand: filters.brand || undefined,
       seller: filters.seller.trim() || undefined,
+      seller_id: !sellerIdInvalid && sellerIdTrimmed ? sellerIdTrimmed : undefined,
+      sale_type: filters.saleType || undefined,
     }),
-    [page, filters]
+    [page, filters, sellerIdInvalid, sellerIdTrimmed]
   );
 
   const brandsQuery = useQuery({
@@ -84,6 +128,7 @@ export function ListingsPage() {
   const listingsQuery = useQuery({
     queryKey: ['admin-listings', queryParams],
     queryFn: () => fetchListings(queryParams),
+    enabled: !sellerIdInvalid,
     // Always refetch on mount/filter change so All statuses never keeps a
     // stale page after moderation (refetchOnWindowFocus is off globally).
     refetchOnMount: 'always',
@@ -108,14 +153,25 @@ export function ListingsPage() {
         status={filters.status}
         brand={filters.brand}
         seller={filters.seller}
+        sellerId={filters.sellerId}
+        saleType={filters.saleType}
         brands={brandsQuery.data ?? []}
         onChange={handleFilterChange}
         onClear={handleClearFilters}
       />
 
-      {listingsQuery.isLoading ? <ListingsTableSkeleton /> : null}
+      {sellerIdInvalid ? (
+        <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+          <p className="text-sm font-medium text-slate-900">Invalid Seller ID</p>
+          <p className="mt-1 text-sm text-slate-500">
+            Enter a positive whole number, or leave Seller ID empty.
+          </p>
+        </div>
+      ) : null}
 
-      {listingsQuery.isError ? (
+      {!sellerIdInvalid && listingsQuery.isLoading ? <ListingsTableSkeleton /> : null}
+
+      {!sellerIdInvalid && listingsQuery.isError ? (
         <div className="flex min-h-[30vh] items-center justify-center">
           <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
             <h3 className="text-lg font-semibold text-slate-900">Unable to load listings</h3>
@@ -134,14 +190,14 @@ export function ListingsPage() {
         </div>
       ) : null}
 
-      {!listingsQuery.isLoading && !listingsQuery.isError ? (
+      {!sellerIdInvalid && !listingsQuery.isLoading && !listingsQuery.isError ? (
         <>
           <p className="text-xs text-slate-500">
             Showing {items.length} on this page
             {declinedInView > 0 ? ` · ${declinedInView} declined` : ''}
             {pagination ? ` · ${pagination.totalItems} total` : ''}
           </p>
-          <ListingsTable items={items} onView={setSelectedId} />
+          <ListingsTable items={items} onView={openListing} />
 
           {pagination && pagination.totalPages > 0 ? (
             <div className="flex flex-col items-center justify-between gap-3 sm:flex-row">
@@ -149,28 +205,12 @@ export function ListingsPage() {
                 Page {pagination.page} of {pagination.totalPages} ·{' '}
                 {pagination.totalItems.toLocaleString()} listings
               </p>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={page <= 1 || listingsQuery.isFetching}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  disabled={
-                    !pagination.totalPages ||
-                    page >= pagination.totalPages ||
-                    listingsQuery.isFetching
-                  }
-                  onClick={() => setPage((p) => p + 1)}
-                  className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Next
-                </button>
-              </div>
+              <NumberedPagination
+                page={page}
+                totalPages={pagination.totalPages}
+                onPageChange={setPage}
+                disabled={listingsQuery.isFetching}
+              />
             </div>
           ) : null}
         </>
@@ -178,8 +218,8 @@ export function ListingsPage() {
 
       <ListingDetailDrawer
         listingId={selectedId}
-        onClose={() => setSelectedId(null)}
-        onSelectListing={setSelectedId}
+        onClose={closeListing}
+        onSelectListing={openListing}
       />
     </div>
   );

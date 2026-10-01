@@ -3,6 +3,13 @@ const pool = require('../config/database');
 const verifyAdminAuth = require('../middleware/verifyAdminAuth');
 const { LISTING_STATUS } = require('../utils/listingStatus');
 const { writeAuditLog } = require('../utils/auditLog');
+const {
+  AGE_GROUPS_SQL,
+  GENDER_SQL,
+  CITY_SQL,
+  fillAgeGroups,
+  toLabeledCounts,
+} = require('../utils/userDemographics');
 
 const router = express.Router();
 
@@ -66,6 +73,9 @@ router.get('/overview', async (req, res) => {
       eventsAgg,
       offersByStatus,
       bannersAgg,
+      biddingListingsAgg,
+      biddingAuctionsAgg,
+      biddingBidsAgg,
     ] = await Promise.all([
       pool.query(
         `SELECT
@@ -169,6 +179,29 @@ router.get('/overview', async (req, res) => {
            COUNT(*) FILTER (WHERE is_active = FALSE)::int AS disabled
          FROM banners`
       ),
+      pool.query(
+        `SELECT COUNT(*) FILTER (WHERE sale_type = 'bid')::int AS bid_listings
+         FROM listings
+         WHERE status <> $1`,
+        [LISTING_STATUS.DELETED]
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE auc.auction_status = 'live')::int AS live,
+           COUNT(*) FILTER (WHERE auc.auction_status IN ('completed', 'ended'))::int AS completed,
+           COUNT(*) FILTER (WHERE auc.auction_status = 'cancelled')::int AS cancelled
+         FROM listing_auctions auc
+         JOIN listings l ON l.id = auc.listing_id
+         WHERE l.status <> $1`,
+        [LISTING_STATUS.DELETED]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS total
+         FROM bids b
+         JOIN listings l ON l.id = b.listing_id
+         WHERE l.status <> $1`,
+        [LISTING_STATUS.DELETED]
+      ),
     ]);
 
     const listingCreated = listingsAgg.rows[0];
@@ -176,6 +209,9 @@ router.get('/overview', async (req, res) => {
     const offerRows = offersByStatus.rows;
     const banners = bannersAgg.rows[0];
     const users = usersAgg.rows[0];
+    const bidListings = biddingListingsAgg.rows[0].bid_listings;
+    const bidTotals = biddingBidsAgg.rows[0].total;
+    const auctions = biddingAuctionsAgg.rows[0];
 
     res.json({
       users: {
@@ -223,6 +259,15 @@ router.get('/overview', async (req, res) => {
         expired: banners.expired,
         disabled: banners.disabled,
       },
+      bidding: {
+        bidListings,
+        liveAuctions: auctions.live,
+        completedAuctions: auctions.completed,
+        cancelledAuctions: auctions.cancelled,
+        totalBids: bidTotals,
+        averageBidsPerBidListing:
+          bidListings === 0 ? 0 : Math.round((bidTotals / bidListings) * 100) / 100,
+      },
     });
   } catch (error) {
     console.error('Error building reports overview:', error);
@@ -247,6 +292,7 @@ router.get('/charts', async (req, res) => {
       byCondition,
       byStatus,
       avgPriceByBrand,
+      bidsPlaced,
     ] = await Promise.all([
       pool.query(
         `SELECT DATE(created_at) AS day, COUNT(*)::int AS count
@@ -308,6 +354,16 @@ router.get('/charts', async (req, res) => {
          LIMIT 10`,
         [since, LISTING_STATUS.DELETED]
       ),
+      pool.query(
+        `SELECT DATE(b.created_at) AS day, COUNT(*)::int AS count
+         FROM bids b
+         JOIN listings l ON l.id = b.listing_id
+         WHERE b.created_at >= $1
+           AND l.status <> $2
+         GROUP BY DATE(b.created_at)
+         ORDER BY day ASC`,
+        [since, LISTING_STATUS.DELETED]
+      ),
     ]);
 
     res.json({
@@ -330,10 +386,34 @@ router.get('/charts', async (req, res) => {
         label: row.label,
         value: Number(row.value),
       })),
+      bidsPlaced: fillDailySeries(bidsPlaced.rows, days),
     });
   } catch (error) {
     console.error('Error building reports charts:', error);
     res.status(500).json({ error: 'Failed to load report charts' });
+  }
+});
+
+/**
+ * GET /api/admin/reports/demographics
+ * Current registered-user distributions. Not filtered by listing/report date range.
+ */
+router.get('/demographics', async (req, res) => {
+  try {
+    const [ageGroups, gender, cities] = await Promise.all([
+      pool.query(AGE_GROUPS_SQL),
+      pool.query(GENDER_SQL),
+      pool.query(CITY_SQL),
+    ]);
+
+    res.json({
+      ageGroups: fillAgeGroups(ageGroups.rows),
+      gender: toLabeledCounts(gender.rows),
+      cities: toLabeledCounts(cities.rows),
+    });
+  } catch (error) {
+    console.error('Error building reports demographics:', error);
+    res.status(500).json({ error: 'Failed to load report demographics' });
   }
 });
 

@@ -1,8 +1,9 @@
 const crypto = require('crypto');
 const { body } = require('express-validator');
-const { isProduction, getOtpPepper, getTwilioSmsConfig, getTestOtpBypassSettings } = require('../config/env');
+const { isProduction, getOtpPepper, getSmsProviderConfig, getTestOtpBypassSettings } = require('../config/env');
 const { getOtpConfig, isOtpDevMode } = require('../config/otp');
 const { normalizePhoneNumber } = require('./phone');
+const { deliverSms, otpSmsText } = require('./smsProvider');
 
 /**
  * Shared OTP service, used by every flow that needs a one-time code (login,
@@ -129,44 +130,36 @@ async function sendOtp(phoneNumber, code, options = {}) {
     return true;
   }
 
-  const twilioConfig = getTwilioSmsConfig();
-  let sentViaTwilio = false;
+  const smsConfig = getSmsProviderConfig();
+  let sentViaProvider = false;
 
-  if (twilioConfig) {
+  if (smsConfig) {
     try {
-      const sendMessage =
-        typeof options.sendMessage === 'function'
-          ? options.sendMessage
-          : async ({ to, from, body }) => {
-              const twilio = require('twilio');
-              const client = twilio(twilioConfig.accountSid, twilioConfig.authToken);
-              await client.messages.create({ body, from, to });
-            };
+      const sendSms =
+        typeof options.sendSms === 'function'
+          ? options.sendSms
+          : (request) => deliverSms(smsConfig, request, options.fetchImpl);
 
-      await sendMessage({
-        to: phoneNumber,
-        from: twilioConfig.phoneNumber,
-        body: `Your Telefonak verification code is: ${code}`,
+      await sendSms({
+        phoneNumber,
+        text: otpSmsText(code),
       });
-      sentViaTwilio = true;
-    } catch (error) {
-      if (isProduction()) {
-        console.error('[otp] Twilio send failed');
-      } else {
-        console.error('[otp] Twilio send failed:', error.message || error);
-      }
-      throw error;
+      sentViaProvider = true;
+    } catch (_error) {
+      // Never log the provider URL or error text: the password is a query parameter.
+      console.error('[otp] SMS send failed');
+      throw new Error('OTP SMS delivery failed');
     }
   }
 
   if (isOtpDevMode()) {
-    // Always print in Development Testing Mode (with or without Twilio).
+    // Always print in Development Testing Mode (with or without an SMS provider).
     logDevOtp(phoneNumber, code);
-  } else if (!sentViaTwilio) {
+  } else if (!sentViaProvider) {
     if (isProduction()) {
       throw new Error('OTP SMS delivery is unavailable');
     }
-    // Non-production fallback without Twilio — still avoid logging the code
+    // Non-production fallback without an SMS provider — still avoid logging the code
     // unless Development Testing Mode is on (handled above).
     console.log(`[TEST MODE] OTP issued for ${formatPhoneForDevLog(phoneNumber)} (code not logged)`);
   }

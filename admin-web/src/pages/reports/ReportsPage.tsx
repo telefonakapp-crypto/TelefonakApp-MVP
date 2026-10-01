@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   downloadReportCsv,
   fetchReportsCharts,
+  fetchReportsDemographics,
   fetchReportsOverview,
 } from '../../services/reportService';
 import { DashboardCard, DashboardCardSkeleton } from '../../components/dashboard/DashboardCard';
@@ -35,6 +36,11 @@ export function ReportsPage() {
     queryFn: () => fetchReportsCharts(days),
   });
 
+  const demographicsQuery = useQuery({
+    queryKey: ['admin-reports-demographics'],
+    queryFn: fetchReportsDemographics,
+  });
+
   const handleExport = async (type: ReportExportType) => {
     setExportError(null);
     setExporting(type);
@@ -53,6 +59,9 @@ export function ReportsPage() {
   const chartsError = chartsQuery.isError;
   const overview = overviewQuery.data;
   const charts = chartsQuery.data;
+  const demographicsLoading = demographicsQuery.isLoading;
+  const demographicsError = demographicsQuery.isError;
+  const demographics = demographicsQuery.data;
 
   return (
     <div className="space-y-8">
@@ -157,6 +166,28 @@ export function ReportsPage() {
               <DashboardCard label="Accepted Offers" value={overview.offers.accepted} />
               <DashboardCard label="Active Banners" value={overview.banners.active} />
             </div>
+            {overview.bidding ? (
+              <div className="space-y-3">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+                  Bidding
+                </h3>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  <DashboardCard label="Bid Listings" value={overview.bidding.bidListings} />
+                  <DashboardCard label="Live Auctions" value={overview.bidding.liveAuctions} />
+                  <DashboardCard
+                    label="Ended Auctions"
+                    value={overview.bidding.completedAuctions}
+                    hint="Completed and ended"
+                  />
+                  <DashboardCard label="Cancelled Auctions" value={overview.bidding.cancelledAuctions} />
+                  <DashboardCard label="Total Bids" value={overview.bidding.totalBids} />
+                  <DashboardCard
+                    label="Avg Bids / Bid Listing"
+                    value={overview.bidding.averageBidsPerBidListing}
+                  />
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
       </section>
@@ -222,6 +253,12 @@ export function ReportsPage() {
               labels={charts.listingsCreated.map((point) => point.date.slice(5))}
               values={charts.listingsCreated.map((point) => point.count)}
             />
+            <LineChartCard
+              title="Bids placed"
+              label="Bids"
+              labels={(charts.bidsPlaced ?? []).map((point) => point.date.slice(5))}
+              values={(charts.bidsPlaced ?? []).map((point) => point.count)}
+            />
             <BarChartCard
               title="Top brands"
               label="Listings"
@@ -247,6 +284,67 @@ export function ReportsPage() {
               labels={charts.listingsByCondition.map((item) => item.label)}
               values={charts.listingsByCondition.map((item) => item.count)}
             />
+          </div>
+        ) : null}
+      </section>
+
+      <section className="space-y-4">
+        <div className="flex items-end justify-between gap-3">
+          <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-500">
+            User demographics
+          </h3>
+          {demographicsError ? (
+            <button
+              type="button"
+              onClick={() => demographicsQuery.refetch()}
+              className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50"
+            >
+              Retry demographics
+            </button>
+          ) : null}
+        </div>
+
+        {demographicsLoading ? (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <ChartSkeleton key={index} />
+            ))}
+          </div>
+        ) : null}
+
+        {demographicsError ? (
+          <div className="rounded-xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+            <p className="text-sm font-medium text-slate-900">Unable to load demographics</p>
+            <p className="mt-1 text-sm text-slate-500">Please try again.</p>
+          </div>
+        ) : null}
+
+        {demographics ? (
+          <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+            <BarChartCard
+              title="User age groups"
+              label="Users"
+              labels={demographics.ageGroups.map((item) => item.label)}
+              values={demographics.ageGroups.map((item) => item.count)}
+              emptyMessage="No data"
+            />
+            <ArcChartCard
+              title="User gender"
+              variant="doughnut"
+              labels={demographics.gender.map((item) => item.label)}
+              values={demographics.gender.map((item) => item.count)}
+              emptyMessage="No data"
+            />
+            <div className="xl:col-span-2">
+              <BarChartCard
+                title="Users by city"
+                label="Users"
+                horizontal
+                labels={demographics.cities.map((item) => item.label)}
+                values={demographics.cities.map((item) => item.count)}
+                emptyMessage="No data"
+              />
+            </div>
           </div>
         ) : null}
       </section>

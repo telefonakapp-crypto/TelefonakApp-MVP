@@ -17,6 +17,51 @@ function formatDate(value?: string | null) {
   }
 }
 
+function displayValue(value?: string | null) {
+  if (value == null) return '—';
+  const trimmed = String(value).trim();
+  return trimmed ? trimmed : '—';
+}
+
+function parseIsoDateOnly(value?: string | null) {
+  if (!value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(value).trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  return { year, month, day };
+}
+
+function formatDateOfBirth(value?: string | null) {
+  const parsed = parseIsoDateOnly(value);
+  if (!parsed) return '—';
+  return new Date(parsed.year, parsed.month - 1, parsed.day).toLocaleDateString();
+}
+
+function formatAgeFromDateOfBirth(value?: string | null) {
+  const parsed = parseIsoDateOnly(value);
+  if (!parsed) return '—';
+  const today = new Date();
+  let age = today.getFullYear() - parsed.year;
+  const month = today.getMonth() + 1;
+  const day = today.getDate();
+  if (month < parsed.month || (month === parsed.month && day < parsed.day)) {
+    age -= 1;
+  }
+  if (age < 0 || age > 150) return '—';
+  return String(age);
+}
+
+function formatGender(value?: string | null) {
+  const gender = displayValue(value);
+  if (gender === '—') return '—';
+  if (gender === 'male') return 'Male';
+  if (gender === 'female') return 'Female';
+  return gender;
+}
+
 function formatPrice(price: number | string) {
   const value = typeof price === 'number' ? price : Number(price);
   if (Number.isNaN(value)) return String(price);
@@ -150,26 +195,43 @@ export function UserDetailDrawer({ userId, onClose }: UserDetailDrawerProps) {
                   <p className="text-sm text-slate-500">Joined {formatDate(user.created_at)}</p>
                 </div>
 
-                <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-                  <DetailField label="Full Name" value={user.full_name} />
-                  <DetailField label="Phone Number" value={user.phone_number} />
-                  <DetailField
-                    label="Status"
-                    value={user.is_active ? 'Active' : 'Disabled'}
-                  />
-                  {!user.is_active ? (
-                    <>
-                      <DetailField
-                        label="Deactivated At"
-                        value={formatDate(user.deactivated_at)}
-                      />
-                      <DetailField
-                        label="Reason for deactivation"
-                        value={formatDeactivationReason(user.deactivation_reason)}
-                      />
-                    </>
-                  ) : null}
-                </dl>
+                <div>
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Profile information
+                  </p>
+                  <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+                    <CopyableIdField label="User ID" value={String(user.id)} />
+                    <DetailField label="Full Name" value={displayValue(user.full_name)} />
+                    <DetailField label="Phone Number" value={displayValue(user.phone_number)} />
+                    <DetailField label="Email" value={displayValue(user.email)} />
+                    <DetailField
+                      label="Date of Birth"
+                      value={formatDateOfBirth(user.date_of_birth)}
+                    />
+                    <DetailField
+                      label="Age"
+                      value={formatAgeFromDateOfBirth(user.date_of_birth)}
+                    />
+                    <DetailField label="Gender" value={formatGender(user.gender)} />
+                    <DetailField label="City" value={displayValue(user.city)} />
+                    <DetailField
+                      label="Status"
+                      value={user.is_active ? 'Active' : 'Disabled'}
+                    />
+                    {!user.is_active ? (
+                      <>
+                        <DetailField
+                          label="Deactivated At"
+                          value={formatDate(user.deactivated_at)}
+                        />
+                        <DetailField
+                          label="Reason for deactivation"
+                          value={formatDeactivationReason(user.deactivation_reason)}
+                        />
+                      </>
+                    ) : null}
+                  </dl>
+                </div>
 
                 <div>
                   <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -292,6 +354,38 @@ function DetailField({ label, value }: { label: string; value: string }) {
     <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
       <dt className="text-xs text-slate-500">{label}</dt>
       <dd className="mt-0.5 font-medium text-slate-900">{value}</dd>
+    </div>
+  );
+}
+
+function CopyableIdField({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2">
+      <dt className="text-xs text-slate-500">{label}</dt>
+      <dd className="mt-0.5 flex items-center justify-between gap-2">
+        <span className="select-all font-mono text-sm font-semibold tracking-wide text-slate-900">
+          {value}
+        </span>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </dd>
     </div>
   );
 }

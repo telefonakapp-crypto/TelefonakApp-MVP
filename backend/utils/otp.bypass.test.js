@@ -2,7 +2,7 @@
 
 /**
  * Temporary TEST_OTP_* one-phone bypass (isolated processes so dotenv/.env
- * cannot leak local secrets). Never prints real Twilio/JWT secrets.
+ * cannot leak local secrets). Never prints real SMS or JWT secrets.
  */
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -13,9 +13,11 @@ const BACKEND_ROOT = path.resolve(__dirname, '..');
 const OTP_JS = path.join(BACKEND_ROOT, 'utils', 'otp.js');
 const CUSTOMER = 'test-only-customer-jwt-secret-aaaaaaaa';
 const ADMIN = 'test-only-admin-jwt-secret-bbbbbbbbbbbb';
-const TWILIO_SID = 'ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const TWILIO_TOKEN = 'test_twilio_auth_token_xx';
-const TWILIO_FROM = '+15005550006';
+const SMS_API_URL = 'https://sms.thecaptainjo.com:8445/websmpp/websms';
+const SMS_USERNAME = 'Telefonak';
+const SMS_PASSWORD = 'test-sms-password-not-real';
+const SMS_SENDER_ID = 'Telefonak';
+const SMS_TYPE = '3';
 
 const TEST_PHONE = '0791244555';
 const TEST_PHONE_E164 = '+962791244555';
@@ -35,9 +37,11 @@ function baseEnv(overrides) {
     JWT_ADMIN_SECRET: ADMIN,
     JWT_SECRET: '',
     OTP_PEPPER: CUSTOMER,
-    TWILIO_ACCOUNT_SID: TWILIO_SID,
-    TWILIO_AUTH_TOKEN: TWILIO_TOKEN,
-    TWILIO_PHONE_NUMBER: TWILIO_FROM,
+    SMS_API_URL,
+    SMS_USERNAME,
+    SMS_PASSWORD,
+    SMS_SENDER_ID,
+    SMS_TYPE,
     TEST_OTP_BYPASS_ENABLED: '',
     TEST_OTP_PHONE: '',
     TEST_OTP_CODE: '',
@@ -72,7 +76,7 @@ function runScript(script, env) {
 }
 
 function assertNoSecretLeak(output) {
-  assert.equal(output.includes(TWILIO_TOKEN), false);
+  assert.equal(output.includes(SMS_PASSWORD), false);
   assert.equal(output.includes(CUSTOMER), false);
   assert.equal(output.includes(ADMIN), false);
 }
@@ -96,7 +100,7 @@ describe('TEST_OTP bypass — request (no SMS)', () => {
       const e164 = generateOtpCode(${JSON.stringify(TEST_PHONE_E164)});
       let smsCalls = 0;
       sendOtp(${JSON.stringify(TEST_PHONE)}, local, {
-        sendMessage: async () => { smsCalls += 1; },
+        sendSms: async () => { smsCalls += 1; },
       }).then(() => {
         process.stdout.write('RESULT ' + JSON.stringify({
           canonical: bypass && bypass.phone,
@@ -172,7 +176,7 @@ describe('TEST_OTP bypass — other phones unchanged', () => {
       const issuedHash = hashOtpCode(${JSON.stringify(OTHER_PHONE)}, OTP_PURPOSE.AUTH, issued);
       let smsCalls = 0;
       sendOtp(${JSON.stringify(OTHER_PHONE)}, issued, {
-        sendMessage: async () => { smsCalls += 1; },
+        sendSms: async () => { smsCalls += 1; },
       }).then(() => {
         process.stdout.write('RESULT ' + JSON.stringify({
           issued: issued,
@@ -202,7 +206,7 @@ describe('TEST_OTP bypass — disabled', () => {
       const issued = generateOtpCode(${JSON.stringify(TEST_PHONE)});
       let smsCalls = 0;
       sendOtp(${JSON.stringify(TEST_PHONE)}, issued, {
-        sendMessage: async () => { smsCalls += 1; },
+        sendSms: async () => { smsCalls += 1; },
       }).then(() => {
         process.stdout.write('RESULT ' + JSON.stringify({
           active: Boolean(bypass),

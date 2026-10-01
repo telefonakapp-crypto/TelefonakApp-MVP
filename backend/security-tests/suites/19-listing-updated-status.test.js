@@ -414,7 +414,17 @@ describe('19 — Listing updated vs resubmitted status', () => {
     );
     assert.ok(allowed.rows[0], 'listings_status_check must exist');
     const def = allowed.rows[0].def;
-    for (const status of ['pending', 'resubmitted', 'updated', 'approved', 'declined', 'sold', 'hidden', 'deleted']) {
+    for (const status of [
+      'pending',
+      'resubmitted',
+      'updated',
+      'approved',
+      'declined',
+      'sold',
+      'hidden',
+      'deleted',
+      'bid_duration_ended',
+    ]) {
       assert.ok(def.includes(`'${status}'`), `CHECK missing ${status}: ${def}`);
     }
   });

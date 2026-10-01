@@ -7,7 +7,7 @@ import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
 import { resolveMediaUrl } from '../utils/api';
 import { fonts, radii, space } from '../utils/designTokens';
 import { getListingDisplayName } from '../utils/listingDisplayName';
-import { Button, Card, StatusBadge } from './ui';
+import { Button, Card, Chip, StatusBadge } from './ui';
 
 /**
  * Compact My Listings card — image + copy on one row, status beside views,
@@ -20,15 +20,19 @@ export function MyListingCard({
   showEdit = false,
   showUpdate = false,
   showOverflow = false,
+  showListAgain = false,
   statusLabel,
+  saleTypeLabel,
   declineReason,
   reviewMessage,
   reviewFeedbackTitle,
   editLabel,
   moreLabel,
+  listAgainLabel,
   onPress,
   onEdit,
   onOpenMenu,
+  onListAgain,
 }) {
   const { colors } = useTheme();
   const { isRTL } = useLanguage();
@@ -116,6 +120,13 @@ export function MyListingCard({
                   style={styles.statusBadge}
                   textStyle={styles.statusText}
                 />
+                {saleTypeLabel ? (
+                  <Chip
+                    label={saleTypeLabel}
+                    style={styles.bidChip}
+                    textStyle={styles.bidChipText}
+                  />
+                ) : null}
                 {showViews ? (
                   <View style={[styles.views, getFlexDirection(isRTL, 'row')]}>
                     <Ionicons
@@ -182,9 +193,17 @@ export function MyListingCard({
           </View>
         ) : null}
 
-        {!isHistory && (showEdit || showUpdate || showOverflow) ? (
+        {showListAgain || (!isHistory && (showEdit || showUpdate || showOverflow)) ? (
           <View style={[styles.actions, getFlexDirection(isRTL, 'row')]}>
-            {showEdit || showUpdate ? (
+            {showListAgain ? (
+              <Button
+                label={listAgainLabel}
+                onPress={onListAgain}
+                style={styles.editButton}
+                textStyle={styles.editButtonText}
+                fullWidth={false}
+              />
+            ) : showEdit || showUpdate ? (
               <Button
                 label={editLabel}
                 onPress={onEdit}
@@ -196,7 +215,7 @@ export function MyListingCard({
               <View style={styles.editButton} />
             )}
 
-            {showOverflow ? (
+            {!isHistory && showOverflow ? (
               <TouchableOpacity
                 style={[
                   styles.moreButton,
@@ -287,6 +306,16 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
   },
   statusText: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  bidChip: {
+    alignSelf: 'center',
+    minHeight: 24,
+    paddingVertical: 4,
+    paddingHorizontal: space[3],
+  },
+  bidChipText: {
     fontSize: 12,
     lineHeight: 16,
   },

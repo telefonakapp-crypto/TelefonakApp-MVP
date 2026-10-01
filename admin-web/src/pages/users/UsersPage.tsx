@@ -7,6 +7,7 @@ import {
   UsersTableSkeleton,
 } from '../../components/users/UsersTable';
 import { UserDetailDrawer } from '../../components/users/UserDetailDrawer';
+import { NumberedPagination } from '../../components/pagination/NumberedPagination';
 
 type FiltersState = {
   search: string;
@@ -104,28 +105,12 @@ export function UsersPage() {
                 Page {pagination.page} of {pagination.totalPages} ·{' '}
                 {pagination.totalItems.toLocaleString()} users
               </p>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={page <= 1 || usersQuery.isFetching}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  disabled={
-                    !pagination.totalPages ||
-                    page >= pagination.totalPages ||
-                    usersQuery.isFetching
-                  }
-                  onClick={() => setPage((p) => p + 1)}
-                  className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Next
-                </button>
-              </div>
+              <NumberedPagination
+                page={page}
+                totalPages={pagination.totalPages}
+                onPageChange={setPage}
+                disabled={usersQuery.isFetching}
+              />
             </div>
           ) : null}
         </>

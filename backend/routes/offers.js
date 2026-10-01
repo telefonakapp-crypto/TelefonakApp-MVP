@@ -11,6 +11,7 @@ const {
 // Offers are only meaningful while a listing is live in the marketplace,
 // so hiding a listing also stops new offers.
 const { LISTING_STATUS } = require('../utils/listingStatus');
+const { LISTING_SALE_TYPE } = require('../utils/listingAuctions');
 const {
   LISTING_IDENTITY_JOINS,
   LISTING_BRAND_NAME_SQL,
@@ -45,7 +46,7 @@ router.post('/:listingId', async (req, res) => {
   try {
     const buyerId = req.user.userId;
     const listingResult = await pool.query(
-      'SELECT id, user_id, status FROM listings WHERE id = $1',
+      'SELECT id, user_id, status, sale_type FROM listings WHERE id = $1',
       [listingId]
     );
 
@@ -57,6 +58,13 @@ router.post('/:listingId', async (req, res) => {
 
     if (listing.user_id === buyerId) {
       return res.status(403).json({ error: 'You cannot make an offer on your own listing' });
+    }
+
+    if ((listing.sale_type || LISTING_SALE_TYPE.NORMAL) === LISTING_SALE_TYPE.BID) {
+      return res.status(409).json({
+        error: 'Bid listings do not accept offers',
+        code: 'BID_LISTING_NO_OFFERS',
+      });
     }
 
     if (listing.status !== OFFERABLE_LISTING_STATUS) {

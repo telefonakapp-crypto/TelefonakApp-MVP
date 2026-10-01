@@ -51,11 +51,14 @@ DB_USER=postgres
 DB_PASSWORD=your_actual_password
 JWT_CUSTOMER_SECRET=your_distinct_customer_jwt_secret_here
 JWT_ADMIN_SECRET=your_distinct_admin_jwt_secret_here
-# Twilio is optional for local development (OTP defaults to 1234).
-# Production (NODE_ENV=production) will not start unless these three are valid:
-TWILIO_ACCOUNT_SID=your_twilio_sid
-TWILIO_AUTH_TOKEN=your_twilio_token
-TWILIO_PHONE_NUMBER=your_twilio_number
+# SMS provider is optional for local development (OTP defaults to 1234).
+# Production (NODE_ENV=production) will not start unless these are valid.
+# Leave SMS_PASSWORD empty here and set it only in the server environment.
+SMS_API_URL=https://sms.thecaptainjo.com:8445/websmpp/websms
+SMS_USERNAME=Telefonak
+SMS_PASSWORD=
+SMS_SENDER_ID=Telefonak
+SMS_TYPE=3
 ```
 
 5. Start the backend server:

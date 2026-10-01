@@ -7,6 +7,7 @@ const STATUS_STYLES: Record<string, string> = {
   sold: 'bg-slate-100 text-slate-700',
   hidden: 'bg-violet-50 text-violet-800',
   deleted: 'bg-slate-100 text-slate-500',
+  bid_duration_ended: 'bg-slate-100 text-slate-700',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -18,6 +19,7 @@ const STATUS_LABELS: Record<string, string> = {
   sold: 'Sold',
   hidden: 'Hidden',
   deleted: 'Deleted',
+  bid_duration_ended: 'Bid ended',
 };
 
 type ListingStatusBadgeProps = {

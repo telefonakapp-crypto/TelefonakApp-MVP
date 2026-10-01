@@ -34,6 +34,26 @@ export type AdminListingListItem = {
   seller_name: string;
   seller_phone?: string;
   thumbnail_image: string | null;
+  sale_type?: 'normal' | 'bid' | string;
+  auction?: AdminListingAuction | null;
+};
+
+export type AdminListingAuction = {
+  id: number;
+  auction_status: string;
+  starting_price: string | null;
+  duration_hours: number | null;
+  starts_at: string | null;
+  original_ends_at: string | null;
+  ends_at: string | null;
+  extension_used: boolean;
+  winning_bid_id: number | null;
+  winning_bid_amount?: string | null;
+  completion_source: string | null;
+  current_highest_bid: string | null;
+  minimum_next_bid: string | null;
+  maximum_bid: string | null;
+  bid_count: number;
 };
 
 export type AdminListingSeller = {
@@ -90,6 +110,8 @@ export type AdminListingDetail = {
   previous_listing_id?: number | null;
   revision_number?: number;
   root_listing_id?: number;
+  sale_type?: 'normal' | 'bid' | string;
+  auction?: AdminListingAuction | null;
   sim_configuration_name?: string | null;
   release_year?: number | null;
   chipset?: string | null;
@@ -131,6 +153,8 @@ export type ListingsQueryParams = {
   status?: string;
   brand?: string;
   seller?: string;
+  seller_id?: string | number;
+  sale_type?: string;
 };
 
 export type BrandOption = {

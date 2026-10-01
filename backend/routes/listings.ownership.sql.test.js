@@ -39,7 +39,7 @@ describe('TFK-M8 customer listing UPDATE ownership SQL', () => {
   const listingUpdates = extractTemplateStatements(listingsSrc, 'UPDATE listings');
 
   it('customer listings.js has owner-scoped UPDATE listings statements', () => {
-    assert.equal(listingUpdates.length, 7);
+    assert.equal(listingUpdates.length, 8);
     for (const sql of listingUpdates) {
       const where = whereClause(sql);
       assert.match(where, /\bid\s*=\s*\$\d+/);
@@ -64,7 +64,7 @@ describe('TFK-M8 customer listing UPDATE ownership SQL', () => {
 
   it('seller edit UPDATE branches include user_id next to id', () => {
     const edits = listingUpdates.filter((sql) => /model_id\s*=\s*\$1/.test(sql));
-    assert.equal(edits.length, 4);
+    assert.equal(edits.length, 5);
     for (const sql of edits) {
       assert.match(whereClause(sql), /id = \$\d+ AND user_id = \$\d+/);
     }

@@ -11,6 +11,8 @@ const {
   fetchAdminListingList,
   fetchAdminListingRowById,
 } = require('../utils/listingQueries');
+const { attachAuctionSummary } = require('../utils/listingAuctionSummary');
+const { centsToMoney, moneyToCents } = require('../utils/listingAuctions');
 
 const router = express.Router();
 
@@ -41,6 +43,19 @@ function resolveModeratedBy(row) {
   return null;
 }
 
+function auctionForAdmin(row) {
+  const summary = attachAuctionSummary(
+    { ...row, sale_type: row.sale_type || 'normal' },
+    { role: 'guest' }
+  );
+  if (!summary.auction) return null;
+  const auction = { ...summary.auction };
+  if (row.admin_winning_bid_amount != null && row.admin_winning_bid_amount !== '') {
+    auction.winning_bid_amount = centsToMoney(moneyToCents(row.admin_winning_bid_amount));
+  }
+  return auction;
+}
+
 function mapListItem(row, baseUrl) {
   return {
     id: row.id,
@@ -68,12 +83,25 @@ function mapListItem(row, baseUrl) {
     seller_name: sellerDisplayName(row),
     seller_phone: row.seller_phone,
     thumbnail_image: absolutizeImageUrl(baseUrl, row.thumbnail_image),
+    sale_type: row.sale_type || 'normal',
+    auction: auctionForAdmin(row),
   };
 }
 
 function parsePositiveInt(value, fallback) {
   const n = parseInt(value, 10);
   return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+function parseOptionalSellerId(value) {
+  if (value == null) return { ok: true, value: null };
+  const raw = Array.isArray(value) ? value[0] : value;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return { ok: true, value: null };
+  if (!/^[1-9]\d*$/.test(trimmed)) return { ok: false };
+  const n = Number(trimmed);
+  if (!Number.isSafeInteger(n) || n <= 0) return { ok: false };
+  return { ok: true, value: n };
 }
 
 /**
@@ -93,6 +121,18 @@ router.get('/', verifyAdminAuth, async (req, res) => {
     const brand = typeof req.query.brand === 'string' ? req.query.brand.trim() : '';
     const seller = typeof req.query.seller === 'string' ? req.query.seller.trim() : '';
     const search = typeof req.query.search === 'string' ? req.query.search : '';
+    const sellerIdParsed = parseOptionalSellerId(req.query.seller_id);
+    const saleType = typeof req.query.sale_type === 'string' ? req.query.sale_type.trim() : '';
+
+    if (!sellerIdParsed.ok) {
+      return res.status(400).json({
+        error: 'Invalid seller_id. Must be a positive integer.',
+      });
+    }
+
+    if (saleType && saleType !== 'all' && saleType !== 'normal' && saleType !== 'bid') {
+      return res.status(400).json({ error: 'Invalid sale_type filter' });
+    }
 
     if (status && status !== 'all') {
       const allowed = Object.values(LISTING_STATUS).filter((s) => s !== LISTING_STATUS.DELETED);
@@ -105,7 +145,9 @@ router.get('/', verifyAdminAuth, async (req, res) => {
       status,
       brand,
       seller,
+      sellerId: sellerIdParsed.value,
       search,
+      saleType: saleType === 'normal' || saleType === 'bid' ? saleType : '',
       limit,
       offset,
     });
@@ -276,6 +318,8 @@ router.get('/:id(\\d+)', verifyAdminAuth, async (req, res) => {
         previous_listing_id: row.previous_listing_id || null,
         revision_number: row.revision_number || 1,
         root_listing_id: rootId,
+        sale_type: row.sale_type || 'normal',
+        auction: auctionForAdmin(row),
         sim_configuration_name: row.sim_configuration_name,
         release_year: row.release_year,
         chipset: row.chipset,

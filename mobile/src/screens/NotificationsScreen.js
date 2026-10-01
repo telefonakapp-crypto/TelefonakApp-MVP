@@ -102,6 +102,8 @@ function getNotificationTypeVisual(type) {
       return { name: 'checkmark-done-circle', color: '#10b981' };
     case 'offer_rejected':
       return { name: 'close-circle', color: '#ef4444' };
+    case 'bid_one_hour_remaining':
+      return { name: 'hammer-outline', color: '#f59e0b' };
     default:
       return { name: 'notifications-outline', color: '#667eea' };
   }

@@ -18,7 +18,7 @@ Customer endpoints never read the `admins` table. An admin JWT presented to a cu
 
 Registration: `POST /api/user/register` after OTP, then profile fields. Phone change: `/api/profile/change-phone/*`.
 
-**OTP in development:** non-production defaults to code `1234` and may echo the code in JSON. In `NODE_ENV=production`, OTP is random, not returned in responses, and Twilio (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`) is required — the process refuses to start if they are missing or invalid. OTP request APIs do not report success if SMS delivery fails. `OTP_DEV_MODE` is ignored in production.
+**OTP in development:** non-production defaults to code `1234` and may echo the code in JSON. In `NODE_ENV=production`, OTP is random, not returned in responses, and the SMS provider (`SMS_API_URL`, `SMS_USERNAME`, `SMS_PASSWORD`, `SMS_SENDER_ID`, `SMS_TYPE`) is required — the process refuses to start if they are missing or invalid. OTP request APIs do not report success if SMS delivery fails. `OTP_DEV_MODE` is ignored in production.
 
 ## Admin Web staff
 

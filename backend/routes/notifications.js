@@ -118,57 +118,46 @@ router.patch(
 );
 
 // PUT /api/notifications/push-token
-router.put(
-  '/push-token',
-  [body('expo_push_token').isString().withMessage('expo_push_token is required')],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+// Old: { expo_push_token, platform? }
+// New: { device_token, provider, platform }
+router.put('/push-token', async (req, res) => {
+  try {
+    const result = await registerPushToken(pool, {
+      userId: req.user.userId,
+      expoPushToken: req.body?.expo_push_token,
+      deviceToken: req.body?.device_token,
+      provider: req.body?.provider,
+      platform: req.body?.platform,
+    });
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
     }
-
-    try {
-      const result = await registerPushToken(pool, {
-        userId: req.user.userId,
-        expoPushToken: req.body.expo_push_token,
-        platform: req.body.platform,
-      });
-      if (result.error) {
-        return res.status(400).json({ error: result.error });
-      }
-      res.json({ token: result.token });
-    } catch (error) {
-      console.error('Error registering push token:', error);
-      res.status(500).json({ error: 'Failed to register push token' });
-    }
+    res.json({ token: result.token });
+  } catch (error) {
+    console.error('Error registering push token:', error.message);
+    res.status(500).json({ error: 'Failed to register push token' });
   }
-);
+});
 
 // DELETE /api/notifications/push-token — deactivate this device token (logout)
-router.delete(
-  '/push-token',
-  [body('expo_push_token').isString().withMessage('expo_push_token is required')],
-  async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+router.delete('/push-token', async (req, res) => {
+  try {
+    const result = await deactivateUserPushToken(pool, {
+      userId: req.user.userId,
+      expoPushToken: req.body?.expo_push_token,
+      deviceToken: req.body?.device_token,
+      provider: req.body?.provider,
+      platform: req.body?.platform,
+    });
+    if (result.error) {
+      return res.status(400).json({ error: result.error });
     }
-
-    try {
-      const result = await deactivateUserPushToken(pool, {
-        userId: req.user.userId,
-        expoPushToken: req.body.expo_push_token,
-      });
-      if (result.error) {
-        return res.status(400).json({ error: result.error });
-      }
-      res.json({ deactivated: result.deactivated });
-    } catch (error) {
-      console.error('Error deactivating push token:', error);
-      res.status(500).json({ error: 'Failed to deactivate push token' });
-    }
+    res.json({ deactivated: result.deactivated });
+  } catch (error) {
+    console.error('Error deactivating push token:', error.message);
+    res.status(500).json({ error: 'Failed to deactivate push token' });
   }
-);
+});
 
 // PATCH /api/notifications/read-all
 router.patch('/read-all', async (req, res) => {

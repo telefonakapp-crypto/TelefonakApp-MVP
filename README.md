@@ -132,7 +132,7 @@ Admin: `cd admin-web && npm run lint` (oxlint). `npm run build` typechecks.
 
 ## Environment
 
-Copy from `backend/env.example`, `mobile/.env.example`, `admin-web/.env.example`. Important API vars: `PORT`, `DB_*`, `JWT_CUSTOMER_SECRET`, `JWT_ADMIN_SECRET` (production requires both, distinct, no `JWT_SECRET` fallback), `OTP_PEPPER` (production HMAC pepper — required, dedicated, no JWT-secret fallback), `ADMIN_ACCESS_TOKEN_TTL` (admin JWT default 8h, production max 24h), `BASE_URL`, `CORS_ORIGINS`, `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` / `TWILIO_PHONE_NUMBER` (production SMS — startup fails if missing/invalid), optional `TRUST_PROXY=1` behind nginx.
+Copy from `backend/env.example`, `mobile/.env.example`, `admin-web/.env.example`. Important API vars: `PORT`, `DB_*`, `JWT_CUSTOMER_SECRET`, `JWT_ADMIN_SECRET` (production requires both, distinct, no `JWT_SECRET` fallback), `OTP_PEPPER` (production HMAC pepper — required, dedicated, no JWT-secret fallback), `ADMIN_ACCESS_TOKEN_TTL` (admin JWT default 8h, production max 24h), `BASE_URL`, `CORS_ORIGINS`, `SMS_API_URL` / `SMS_USERNAME` / `SMS_PASSWORD` / `SMS_SENDER_ID` / `SMS_TYPE` (production SMS — startup fails if missing/invalid), optional `TRUST_PROXY=1` behind nginx.
 
 Non-production OTP defaults to `1234` and may be returned in JSON. Production OTP is random, never echoed, and is not issued unless Twilio SMS delivery succeeds.
 

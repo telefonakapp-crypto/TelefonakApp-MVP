@@ -122,6 +122,10 @@ export function localizeNotification(item, t, language) {
         price,
       }),
     },
+    bid_one_hour_remaining: {
+      title: t('notifications.types.bidOneHourRemaining.title'),
+      message: fill(t('notifications.types.bidOneHourRemaining.message'), { listing }),
+    },
   };
 
   if (type === 'listing_rejected' || type === 'listing_declined') {

@@ -98,6 +98,36 @@ async function main() {
     afternoon.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
   );
 
+  const bidHour = {
+    type: 'bid_one_hour_remaining',
+    title: 'Bid ending soon',
+    message:
+      'Your Bid listing "Apple iPhone 16" has about 1 hour remaining. You can view bidders, extend once, or end the bid.',
+  };
+  const bidHourEn = localizeNotification(bidHour, tFor('en'), 'en');
+  assert.equal(bidHourEn.title, 'Bid ending soon');
+  assert.equal(bidHourEn.message, bidHour.message);
+  assert.equal(bidHourEn.message.includes('phone_number'), false);
+
+  const bidHourAr = localizeNotification(bidHour, tFor('ar'), 'ar');
+  assert.equal(bidHourAr.title, 'المزايدة تنتهي قريباً');
+  assert.equal(bidHourAr.message.includes('Apple iPhone 16'), true);
+  assert.equal(bidHourAr.message.includes('Bid ending soon'), false);
+  assert.equal(bidHourAr.message.includes('phone_number'), false);
+  assert.equal(/[A-Za-z]{4,}/.test(bidHourAr.title), false);
+
+  const unknownBid = {
+    type: 'bid_placed',
+    title: 'Stored title',
+    message: 'Stored message only.',
+  };
+  const unknownEn = localizeNotification(unknownBid, tFor('en'), 'en');
+  const unknownAr = localizeNotification(unknownBid, tFor('ar'), 'ar');
+  assert.equal(unknownEn.title, 'Stored title');
+  assert.equal(unknownEn.message, 'Stored message only.');
+  assert.equal(unknownAr.title, 'Stored title');
+  assert.equal(unknownAr.message, 'Stored message only.');
+
   console.log('notificationDisplay: cases passed');
 }
 

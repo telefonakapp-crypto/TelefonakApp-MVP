@@ -152,15 +152,31 @@ function assertDistinctOtpPepper() {
   }
 }
 
-function isTwilioPlaceholder(value) {
+function isSmsPlaceholder(value) {
   const v = String(value || '').trim().toLowerCase();
   if (!v) return true;
+  if (v.includes('<secret>')) return true;
   return (
     v.startsWith('your_') ||
     v.startsWith('replace_with') ||
+    v.startsWith('example') ||
     v === 'change-me' ||
-    v === 'changeme'
+    v === 'changeme' ||
+    v === '<secret>'
   );
+}
+
+function isValidSmsApiUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && Boolean(url.hostname);
+  } catch (_error) {
+    return false;
+  }
+}
+
+function isValidSmsType(value) {
+  return /^[0-9]+$/.test(String(value || '').trim());
 }
 
 /**
@@ -192,7 +208,7 @@ function isTestOtpBypassConfigValid() {
 
 /**
  * Production: ENABLED=true with invalid phone/code must fail startup.
- * Do not silently disable the bypass (and do not fall through to Twilio).
+ * Do not silently disable the bypass (and do not fall through to SMS validation).
  */
 function assertProductionTestOtpBypassConfig() {
   if (!isProduction()) return;
@@ -204,42 +220,55 @@ function assertProductionTestOtpBypassConfig() {
 }
 
 /**
- * Twilio credentials used by utils/otp.js sendOtp.
- * Returns null when SMS cannot be sent (missing/placeholder config).
+ * SMS provider credentials used by utils/otp.js sendOtp.
+ * Returns null when SMS cannot be sent (missing/placeholder/invalid config).
  */
-function getTwilioSmsConfig() {
-  const accountSid = readEnvSecret('TWILIO_ACCOUNT_SID');
-  const authToken = readEnvSecret('TWILIO_AUTH_TOKEN');
-  const phoneNumber = readEnvSecret('TWILIO_PHONE_NUMBER');
+function getSmsProviderConfig() {
+  const apiUrl = readEnvSecret('SMS_API_URL');
+  const username = readEnvSecret('SMS_USERNAME');
+  const password = readEnvSecret('SMS_PASSWORD');
+  const senderId = readEnvSecret('SMS_SENDER_ID');
+  const type = readEnvSecret('SMS_TYPE');
 
-  if (!accountSid || !authToken || !phoneNumber) return null;
-  if (isTwilioPlaceholder(accountSid) || isTwilioPlaceholder(authToken) || isTwilioPlaceholder(phoneNumber)) {
+  if (!apiUrl || !username || !password || !senderId || !type) return null;
+  if (
+    isSmsPlaceholder(apiUrl) ||
+    isSmsPlaceholder(username) ||
+    isSmsPlaceholder(password) ||
+    isSmsPlaceholder(senderId) ||
+    isSmsPlaceholder(type)
+  ) {
     return null;
   }
+  if (!isValidSmsApiUrl(apiUrl) || !isValidSmsType(type)) return null;
 
-  return { accountSid, authToken, phoneNumber };
+  return { apiUrl, username, password, senderId, type };
 }
 
-function assertProductionTwilioConfig() {
+function assertProductionSmsConfig() {
   if (!isProduction()) return;
   if (isTestOtpBypassConfigValid()) return;
 
-  const accountSid = readEnvSecret('TWILIO_ACCOUNT_SID');
-  const authToken = readEnvSecret('TWILIO_AUTH_TOKEN');
-  const phoneNumber = readEnvSecret('TWILIO_PHONE_NUMBER');
+  const apiUrl = readEnvSecret('SMS_API_URL');
+  const username = readEnvSecret('SMS_USERNAME');
+  const password = readEnvSecret('SMS_PASSWORD');
+  const senderId = readEnvSecret('SMS_SENDER_ID');
+  const type = readEnvSecret('SMS_TYPE');
 
-  if (!/^AC[0-9a-fA-F]{32}$/.test(accountSid)) {
-    throw new Error(
-      'TWILIO_ACCOUNT_SID is invalid for production SMS (Twilio Account SID required)'
-    );
+  if (!isValidSmsApiUrl(apiUrl) || isSmsPlaceholder(apiUrl)) {
+    throw new Error('SMS_API_URL is invalid for production SMS');
   }
-  if (isTwilioPlaceholder(authToken) || authToken.length < 16) {
-    throw new Error('TWILIO_AUTH_TOKEN is invalid for production SMS');
+  if (!username || isSmsPlaceholder(username)) {
+    throw new Error('SMS_USERNAME is invalid for production SMS');
   }
-  if (!/^\+[1-9]\d{6,14}$/.test(phoneNumber)) {
-    throw new Error(
-      'TWILIO_PHONE_NUMBER is invalid for production SMS (E.164 number required, e.g. +9627…)'
-    );
+  if (!password || isSmsPlaceholder(password)) {
+    throw new Error('SMS_PASSWORD is invalid for production SMS');
+  }
+  if (!senderId || isSmsPlaceholder(senderId)) {
+    throw new Error('SMS_SENDER_ID is invalid for production SMS');
+  }
+  if (!isValidSmsType(type) || isSmsPlaceholder(type)) {
+    throw new Error('SMS_TYPE is invalid for production SMS');
   }
 }
 
@@ -324,9 +353,11 @@ function validateEnv() {
     if (!process.env.BASE_URL) missing.push('BASE_URL');
     if (!process.env.CORS_ORIGINS) missing.push('CORS_ORIGINS');
     if (!isTestOtpBypassRequested()) {
-      if (!readEnvSecret('TWILIO_ACCOUNT_SID')) missing.push('TWILIO_ACCOUNT_SID');
-      if (!readEnvSecret('TWILIO_AUTH_TOKEN')) missing.push('TWILIO_AUTH_TOKEN');
-      if (!readEnvSecret('TWILIO_PHONE_NUMBER')) missing.push('TWILIO_PHONE_NUMBER');
+      if (!readEnvSecret('SMS_API_URL')) missing.push('SMS_API_URL');
+      if (!readEnvSecret('SMS_USERNAME')) missing.push('SMS_USERNAME');
+      if (!readEnvSecret('SMS_PASSWORD')) missing.push('SMS_PASSWORD');
+      if (!readEnvSecret('SMS_SENDER_ID')) missing.push('SMS_SENDER_ID');
+      if (!readEnvSecret('SMS_TYPE')) missing.push('SMS_TYPE');
     }
     if (!isUsableOtpPepper(readEnvSecret('OTP_PEPPER'))) {
       missing.push('OTP_PEPPER');
@@ -341,7 +372,7 @@ function validateEnv() {
 
   assertDistinctJwtSecrets();
   assertProductionTestOtpBypassConfig();
-  assertProductionTwilioConfig();
+  assertProductionSmsConfig();
   assertAdminAccessTokenTtl();
   assertDistinctOtpPepper();
 
@@ -357,7 +388,7 @@ module.exports = {
   getCustomerJwtSecret,
   getAdminJwtSecret,
   getOtpPepper,
-  getTwilioSmsConfig,
+  getSmsProviderConfig,
   getTestOtpBypassSettings,
   isTestOtpBypassConfigValid,
   getAdminAccessTokenTtl,

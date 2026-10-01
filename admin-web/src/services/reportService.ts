@@ -4,6 +4,7 @@ import type {
   ReportExportType,
   ReportRangeDays,
   ReportsCharts,
+  ReportsDemographics,
   ReportsOverview,
 } from '../types/report';
 
@@ -18,6 +19,13 @@ export async function fetchReportsCharts(
   const { data } = await apiClient.get<ReportsCharts>('/admin/reports/charts', {
     params: { days },
   });
+  return data;
+}
+
+export async function fetchReportsDemographics(): Promise<ReportsDemographics> {
+  const { data } = await apiClient.get<ReportsDemographics>(
+    '/admin/reports/demographics'
+  );
   return data;
 }
 

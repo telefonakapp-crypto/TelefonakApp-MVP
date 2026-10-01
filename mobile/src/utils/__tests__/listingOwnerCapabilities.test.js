@@ -76,6 +76,7 @@ const OWNER_BY_STATUS = {
   },
   sold: NONE,
   deleted: NONE,
+  bid_duration_ended: NONE,
 };
 
 function assertCaps(actual, expected, message) {
@@ -92,7 +93,7 @@ async function main() {
   const moduleUrl = pathToFileURL(
     path.join(__dirname, '..', 'listingOwnerCapabilities.js')
   ).href;
-  const { listingOwnerCapabilities } = await import(moduleUrl);
+  const { listingOwnerCapabilities, partitionOwnerListings } = await import(moduleUrl);
 
   let cases = 0;
 
@@ -153,6 +154,190 @@ async function main() {
   cases += 1;
 
   assertCaps(listingOwnerCapabilities(null, { isOwner: true }), NONE, 'null listing');
+  cases += 1;
+
+  const pendingBid = {
+    status: 'pending',
+    sale_type: 'bid',
+    auction: { auction_status: 'pending_start', can_list_again: false },
+  };
+  assertCaps(
+    listingOwnerCapabilities(pendingBid, { isOwner: true }),
+    OWNER_BY_STATUS.pending,
+    'pending Bid keeps pending caps'
+  );
+  cases += 1;
+
+  const liveBid = {
+    status: 'approved',
+    sale_type: 'bid',
+    auction: { auction_status: 'live', can_list_again: false },
+  };
+  assertCaps(
+    listingOwnerCapabilities(liveBid, { isOwner: true }),
+    NONE,
+    'live Bid is frozen'
+  );
+  cases += 1;
+  assert.equal(
+    listingOwnerCapabilities(liveBid, { isOwner: true }).canEdit,
+    false,
+    'live Bid cannot edit'
+  );
+  cases += 1;
+  assert.equal(
+    listingOwnerCapabilities(liveBid, { isOwner: true }).canHide,
+    false,
+    'live Bid cannot hide'
+  );
+  cases += 1;
+  assert.equal(
+    listingOwnerCapabilities(
+      { ...liveBid, status: 'hidden' },
+      { isOwner: true }
+    ).canUnhide,
+    false,
+    'live Bid cannot unhide'
+  );
+  cases += 1;
+  assert.equal(
+    listingOwnerCapabilities(liveBid, { isOwner: true }).canMarkSold,
+    false,
+    'live Bid cannot mark sold'
+  );
+  cases += 1;
+  assert.equal(
+    listingOwnerCapabilities(liveBid, { isOwner: true }).canDelete,
+    false,
+    'live Bid cannot generic-delete'
+  );
+  cases += 1;
+
+  const endedExpired = {
+    status: 'bid_duration_ended',
+    sale_type: 'bid',
+    auction: {
+      auction_status: 'completed',
+      completion_source: 'expired',
+      can_list_again: true,
+    },
+  };
+  const endedSold = {
+    status: 'bid_duration_ended',
+    sale_type: 'bid',
+    auction: {
+      auction_status: 'completed',
+      completion_source: 'sold',
+      can_list_again: false,
+    },
+  };
+  const endedCancelled = {
+    status: 'bid_duration_ended',
+    sale_type: 'bid',
+    auction: {
+      auction_status: 'cancelled',
+      completion_source: 'cancelled',
+      can_list_again: false,
+    },
+  };
+
+  for (const listing of [endedExpired, endedSold, endedCancelled]) {
+    assertCaps(
+      listingOwnerCapabilities(listing, { isOwner: true }),
+      NONE,
+      `bid_duration_ended ${listing.auction.completion_source}`
+    );
+    cases += 1;
+    assert.equal(
+      listing.auction.can_list_again,
+      listing.auction.completion_source === 'expired',
+      'can_list_again preserved on listing.auction'
+    );
+    cases += 1;
+  }
+
+  const deletedBid = {
+    status: 'deleted',
+    sale_type: 'bid',
+    auction: { auction_status: 'live' },
+  };
+  assertCaps(
+    listingOwnerCapabilities(deletedBid, { isOwner: true }),
+    NONE,
+    'deleted Bid remains historical'
+  );
+  cases += 1;
+
+  const partitioned = partitionOwnerListings([
+    { id: 1, status: 'approved', sale_type: 'normal' },
+    { id: 2, status: 'pending', sale_type: 'bid', auction: { auction_status: 'pending_start' } },
+    { id: 3, status: 'approved', sale_type: 'bid', auction: { auction_status: 'live' } },
+    { id: 4, status: 'sold', sale_type: 'normal' },
+    { id: 5, status: 'deleted', sale_type: 'normal' },
+    {
+      id: 6,
+      status: 'bid_duration_ended',
+      sale_type: 'bid',
+      auction: { completion_source: 'expired', can_list_again: true },
+    },
+    {
+      id: 7,
+      status: 'bid_duration_ended',
+      sale_type: 'bid',
+      auction: { completion_source: 'sold', can_list_again: false },
+    },
+    {
+      id: 8,
+      status: 'bid_duration_ended',
+      sale_type: 'bid',
+      auction: { completion_source: 'cancelled', can_list_again: false },
+    },
+    { id: 9, status: 'hidden', sale_type: 'normal' },
+    { id: 10, status: 'declined', sale_type: 'normal' },
+  ]);
+  assert.deepEqual(
+    partitioned.active.map((row) => row.id),
+    [1, 2, 3, 9, 10],
+    'active excludes sold/deleted/bid_duration_ended'
+  );
+  cases += 1;
+  assert.deepEqual(
+    partitioned.history.map((row) => row.id),
+    [4, 6, 7, 8, 5],
+    'history is sold, ended bids, then deleted'
+  );
+  cases += 1;
+  assert.equal(
+    partitioned.history.some((row) => row.status === 'bid_duration_ended'),
+    true
+  );
+  cases += 1;
+  assert.equal(
+    partitioned.active.some((row) => row.status === 'bid_duration_ended'),
+    false
+  );
+  cases += 1;
+  assert.equal(partitioned.sold[0].id, 4);
+  cases += 1;
+  assert.equal(partitioned.deleted[0].id, 5);
+  cases += 1;
+  assert.equal(
+    partitioned.endedBids.every((row) => row.auction != null),
+    true,
+    'ended bid auction objects are preserved'
+  );
+  cases += 1;
+  assert.equal(
+    partitioned.endedBids.find((row) => row.id === 6).auction.can_list_again,
+    true,
+    'expired Bid keeps can_list_again'
+  );
+  cases += 1;
+  assert.equal(
+    partitioned.endedBids.find((row) => row.id === 7).auction.can_list_again,
+    false,
+    'manually sold Bid keeps can_list_again false'
+  );
   cases += 1;
 
   console.log(`listingOwnerCapabilities: ${cases} cases passed`);

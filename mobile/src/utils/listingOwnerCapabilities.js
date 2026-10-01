@@ -6,7 +6,11 @@
  * screen-specific presentation (Update on My Listings, Edit on Details).
  */
 
-const TERMINAL_STATUSES = ['sold', 'deleted'];
+export const HISTORY_LISTING_STATUSES = Object.freeze([
+  'sold',
+  'deleted',
+  'bid_duration_ended',
+]);
 
 const EDITABLE_STATUSES = [
   'pending',
@@ -25,11 +29,27 @@ const NONE = Object.freeze({
   canDelete: false,
 });
 
+export function isHistoryListingStatus(status) {
+  return HISTORY_LISTING_STATUSES.includes(status);
+}
+
+export function isBidListing(listing) {
+  return listing?.sale_type === 'bid';
+}
+
+export function isLiveBidListing(listing) {
+  return (
+    isBidListing(listing) &&
+    listing?.auction?.auction_status === 'live'
+  );
+}
+
 export function listingOwnerCapabilities(listing, { isOwner } = {}) {
   if (!isOwner || listing == null) return NONE;
 
   const status = listing.status;
-  if (TERMINAL_STATUSES.includes(status)) return NONE;
+  if (isHistoryListingStatus(status)) return NONE;
+  if (isLiveBidListing(listing)) return NONE;
 
   return {
     canEdit: EDITABLE_STATUSES.includes(status),
@@ -38,5 +58,27 @@ export function listingOwnerCapabilities(listing, { isOwner } = {}) {
     canUnhide: status === 'hidden',
     canMarkSold: status === 'approved',
     canDelete: true,
+  };
+}
+
+export function partitionOwnerListings(listings) {
+  const active = [];
+  const sold = [];
+  const endedBids = [];
+  const deleted = [];
+
+  for (const listing of listings || []) {
+    if (listing.status === 'sold') sold.push(listing);
+    else if (listing.status === 'bid_duration_ended') endedBids.push(listing);
+    else if (listing.status === 'deleted') deleted.push(listing);
+    else active.push(listing);
+  }
+
+  return {
+    active,
+    sold,
+    endedBids,
+    deleted,
+    history: [...sold, ...endedBids, ...deleted],
   };
 }

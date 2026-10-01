@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { getFlexDirection, getTextAlign } from '../utils/rtlStyles';
@@ -23,20 +24,30 @@ import {
   deleteListing,
   shareListing,
 } from '../utils/listingOwnerActions';
-import { listingOwnerCapabilities } from '../utils/listingOwnerCapabilities';
+import {
+  isHistoryListingStatus,
+  isLiveBidListing,
+  listingOwnerCapabilities,
+  partitionOwnerListings,
+} from '../utils/listingOwnerCapabilities';
+import {
+  auctionDurationLabelKey,
+  auctionDurationOptions,
+  DEFAULT_AUCTION_DURATION_HOURS,
+  isAllowedAuctionDuration,
+} from '../utils/auctionDuration';
+import { buildListAgainBody, canListAgain, fillTemplate } from '../utils/listingBidUi';
+import { bidErrorI18nKey, bidErrorShouldCloseListAgain } from '../utils/bidApiErrors';
 import {
   EmptyState,
   IconButton,
   BottomSheet,
+  Button,
   HorizontalCardSkeleton,
   OwnerActionRow,
   ownerActionListStyle,
 } from '../components/ui';
 import { MyListingCard } from '../components/MyListingCard';
-
-// Mirrors TERMINAL_LISTING_STATUSES on the backend: these listings are history
-// and carry no actions.
-const TERMINAL_STATUSES = ['sold', 'deleted'];
 
 export default function MyListingsScreen() {
   const navigation = useNavigation();
@@ -47,6 +58,9 @@ export default function MyListingsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [segment, setSegment] = useState('active'); // active | history
   const [menuListing, setMenuListing] = useState(null);
+  const [listAgainListing, setListAgainListing] = useState(null);
+  const [listAgainHours, setListAgainHours] = useState(DEFAULT_AUCTION_DURATION_HOURS);
+  const [listAgainSubmitting, setListAgainSubmitting] = useState(false);
 
   // /listings/user/my is always the caller's listings — owner actions are always allowed.
   const isListingOwner = () => true;
@@ -101,6 +115,8 @@ export default function MyListingsScreen() {
         return t('myListings.hidden');
       case 'deleted':
         return t('myListings.deleted');
+      case 'bid_duration_ended':
+        return t('myListings.bidDurationEnded');
       default:
         return status;
     }
@@ -212,6 +228,69 @@ export default function MyListingsScreen() {
 
   const closeMenu = () => setMenuListing(null);
 
+  const closeListAgainSheet = () => {
+    setListAgainListing(null);
+    setListAgainHours(DEFAULT_AUCTION_DURATION_HOURS);
+  };
+
+  const openListAgainSheet = (listing) => {
+    if (listAgainSubmitting || !canListAgain(listing, { isOwner: true })) return;
+    setMenuListing(null);
+    setListAgainHours(DEFAULT_AUCTION_DURATION_HOURS);
+    setListAgainListing(listing);
+  };
+
+  const submitListAgain = async (listing, hours) => {
+    if (listAgainSubmitting) return;
+    const listingId = listing?.id;
+    if (!listingId || !isAllowedAuctionDuration(hours)) {
+      Alert.alert(t('common.error'), t('sellerBid.selectDuration'));
+      return;
+    }
+    setListAgainSubmitting(true);
+    try {
+      await apiClient.post(
+        `/listings/${listingId}/list-again`,
+        buildListAgainBody(hours)
+      );
+      closeListAgainSheet();
+      Alert.alert(t('sellerBid.listAgainSuccessTitle'), t('sellerBid.listAgainSuccess'));
+      fetchListings();
+    } catch (error) {
+      logApiError('MyListingsScreen.listAgain', error);
+      const message = bidErrorI18nKey(error)
+        ? t(bidErrorI18nKey(error))
+        : getApiErrorMessage(error, t('sellerBid.listAgainFailed'));
+      Alert.alert(t('common.error'), message);
+      if (bidErrorShouldCloseListAgain(error)) {
+        closeListAgainSheet();
+        fetchListings();
+      }
+    } finally {
+      setListAgainSubmitting(false);
+    }
+  };
+
+  const confirmListAgain = (listing, hours) => {
+    if (listAgainSubmitting) return;
+    if (!isAllowedAuctionDuration(hours)) {
+      Alert.alert(t('common.error'), t('sellerBid.selectDuration'));
+      return;
+    }
+    const durationLabel = t(auctionDurationLabelKey(hours));
+    Alert.alert(
+      t('sellerBid.listAgain'),
+      fillTemplate(t('sellerBid.confirmListAgain'), { duration: durationLabel }),
+      [
+        { text: t('common.cancel'), style: 'cancel' },
+        {
+          text: t('sellerBid.listAgain'),
+          onPress: () => submitListAgain(listing, hours),
+        },
+      ]
+    );
+  };
+
   const runMenuAction = (action) => {
     const listing = menuListing;
     closeMenu();
@@ -271,12 +350,13 @@ export default function MyListingsScreen() {
     return items;
   };
 
-  const activeListings = listings.filter(
-    (listing) => !TERMINAL_STATUSES.includes(listing.status)
-  );
-  const soldListings = listings.filter((listing) => listing.status === 'sold');
-  const deletedListings = listings.filter((listing) => listing.status === 'deleted');
-  const historyListings = [...soldListings, ...deletedListings];
+  const {
+    active: activeListings,
+    sold: soldListings,
+    endedBids: endedBidListings,
+    deleted: deletedListings,
+    history: historyListings,
+  } = partitionOwnerListings(listings);
   const visibleListings = segment === 'active' ? activeListings : historyListings;
 
   const sectionTitles = new Map();
@@ -284,8 +364,14 @@ export default function MyListingsScreen() {
     if (soldListings.length > 0) {
       sectionTitles.set(0, t('myListings.soldListings'));
     }
+    if (endedBidListings.length > 0) {
+      sectionTitles.set(soldListings.length, t('myListings.bidDurationEnded'));
+    }
     if (deletedListings.length > 0) {
-      sectionTitles.set(soldListings.length, t('myListings.deletedListings'));
+      sectionTitles.set(
+        soldListings.length + endedBidListings.length,
+        t('myListings.deletedListings')
+      );
     }
   }
 
@@ -328,7 +414,7 @@ export default function MyListingsScreen() {
   }
 
   const renderListingCard = (listing, index) => {
-    const isHistory = TERMINAL_STATUSES.includes(listing.status);
+    const isHistory = isHistoryListingStatus(listing.status);
     const isDeleted = listing.status === 'deleted';
     const sectionTitle = sectionTitles.get(index);
     const openListingDetails = () =>
@@ -340,16 +426,18 @@ export default function MyListingsScreen() {
     const showEdit = caps.canEdit;
     const showUpdate = caps.canResubmit;
     const showOverflow = caps.canDelete;
+    const showListAgain = canListAgain(listing, { isOwner: true });
     const declineReason =
       typeof listing.decline_reason === 'string' && listing.decline_reason.trim()
         ? listing.decline_reason.trim()
         : t('listingDetails.rejectedNoReason');
 
-    const reviewMessage =
-      !isHistory &&
-      (listing.status === 'pending' ||
-        listing.status === 'resubmitted' ||
-        listing.status === 'updated')
+    const reviewMessage = isLiveBidListing(listing)
+      ? t('myListings.liveBidFrozen')
+      : !isHistory &&
+          (listing.status === 'pending' ||
+            listing.status === 'resubmitted' ||
+            listing.status === 'updated')
         ? listing.status === 'resubmitted'
           ? t('myListings.resubmittedNote') ||
             'Your listing has been resubmitted and is under review again.'
@@ -381,7 +469,11 @@ export default function MyListingsScreen() {
           showEdit={showEdit}
           showUpdate={showUpdate}
           showOverflow={showOverflow}
+          showListAgain={showListAgain}
           statusLabel={getStatusText(listing.status)}
+          saleTypeLabel={
+            listing.sale_type === 'bid' ? t('myListings.bid') : null
+          }
           declineReason={showUpdate ? declineReason : null}
           reviewMessage={reviewMessage}
           reviewFeedbackTitle={t('myListings.reviewFeedback') || 'Review feedback'}
@@ -391,11 +483,13 @@ export default function MyListingsScreen() {
               : t('myListings.edit')
           }
           moreLabel={t('common.more') || 'More'}
+          listAgainLabel={t('sellerBid.listAgain')}
           onPress={openListingDetails}
           onEdit={() =>
             navigation.navigate('CreateListing', { listingId: listing.id })
           }
           onOpenMenu={() => setMenuListing(listing)}
+          onListAgain={() => openListAgainSheet(listing)}
         />
       </React.Fragment>
     );
@@ -533,7 +627,7 @@ export default function MyListingsScreen() {
             description={
               segment === 'history'
                 ? t('myListings.noHistoryHint') ||
-                  'Sold and deleted listings will appear here.'
+                  'Sold, ended Bid, and deleted listings will appear here.'
                 : t('myListings.noActiveHint') ||
                   'Create a listing to start selling on Telefonak.'
             }
@@ -565,9 +659,70 @@ export default function MyListingsScreen() {
               label={item.label}
               onPress={item.onPress}
               variant={item.destructive ? 'danger' : 'neutral'}
+              disabled={listAgainSubmitting}
             />
           ))}
         </View>
+      </BottomSheet>
+
+      <BottomSheet
+        open={!!listAgainListing}
+        onClose={() => {
+          if (listAgainSubmitting) return;
+          closeListAgainSheet();
+        }}
+        title={t('sellerBid.listAgain')}
+        maxHeight="80%"
+      >
+        <ScrollView keyboardShouldPersistTaps="handled">
+          <Text
+            style={[
+              styles.sectionLabel,
+              { color: colors.textSecondary, textTransform: 'none' },
+              getTextAlign(isRTL, 'auto'),
+            ]}
+          >
+            {t('sellerBid.selectDuration')}
+          </Text>
+          {auctionDurationOptions().map((option) => {
+            const selected = Number(listAgainHours) === Number(option.hours);
+            return (
+              <TouchableOpacity
+                key={option.hours}
+                onPress={() => !listAgainSubmitting && setListAgainHours(option.hours)}
+                accessibilityRole="button"
+                accessibilityState={{ selected }}
+                disabled={listAgainSubmitting}
+                style={[
+                  styles.durationRow,
+                  {
+                    backgroundColor: colors.surfaceContainerLow,
+                    borderWidth: selected ? 2 : 0,
+                    borderColor: selected ? colors.primary : 'transparent',
+                  },
+                ]}
+              >
+                <View style={[styles.durationInner, getFlexDirection(isRTL, 'row')]}>
+                  <Text style={[styles.durationLabel, { color: colors.text, flex: 1 }]}>
+                    {t(auctionDurationLabelKey(option.hours))}
+                  </Text>
+                  {selected ? (
+                    <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
+                  ) : (
+                    <Ionicons name="ellipse-outline" size={22} color={colors.textMuted} />
+                  )}
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+          <Button
+            label={t('sellerBid.listAgain')}
+            onPress={() => confirmListAgain(listAgainListing, listAgainHours)}
+            loading={listAgainSubmitting}
+            disabled={listAgainSubmitting || listAgainHours == null}
+            style={styles.listAgainSubmit}
+          />
+        </ScrollView>
       </BottomSheet>
     </SafeAreaView>
   );
@@ -644,5 +799,22 @@ const styles = StyleSheet.create({
   },
   menuList: {
     paddingBottom: space[4],
+  },
+  durationRow: {
+    marginTop: space[2],
+    paddingVertical: space[3],
+    paddingHorizontal: space[3],
+    borderRadius: radii.md,
+  },
+  durationInner: {
+    alignItems: 'center',
+  },
+  durationLabel: {
+    fontFamily: fonts.bodyMedium,
+    fontSize: 16,
+  },
+  listAgainSubmit: {
+    marginTop: space[3],
+    marginBottom: space[4],
   },
 });

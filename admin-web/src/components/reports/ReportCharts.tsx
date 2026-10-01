@@ -42,16 +42,18 @@ type ChartCardProps = {
   title: string;
   children: ReactNode;
   empty?: boolean;
+  emptyMessage?: string;
+  height?: number;
 };
 
-export function ChartCard({ title, children, empty }: ChartCardProps) {
+export function ChartCard({ title, children, empty, emptyMessage, height }: ChartCardProps) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
-      <div className="mt-4 h-64">
+      <div className="mt-4" style={{ height: height ?? 256 }}>
         {empty ? (
           <div className="flex h-full items-center justify-center text-sm text-slate-500">
-            No data for this period
+            {emptyMessage ?? 'No data for this period'}
           </div>
         ) : (
           children
@@ -126,12 +128,18 @@ export function BarChartCard({
   values,
   label,
   formatValue,
+  horizontal = false,
+  emptyMessage,
 }: SeriesChartProps & {
   title: string;
   formatValue?: (value: number) => string;
+  horizontal?: boolean;
+  emptyMessage?: string;
 }) {
+  const height = horizontal ? Math.max(256, labels.length * 36) : undefined;
+
   return (
-    <ChartCard title={title} empty={labels.length === 0}>
+    <ChartCard title={title} empty={labels.length === 0} emptyMessage={emptyMessage} height={height}>
       <Bar
         data={{
           labels,
@@ -145,6 +153,7 @@ export function BarChartCard({
           ],
         }}
         options={{
+          indexAxis: horizontal ? 'y' : 'x',
           responsive: true,
           maintainAspectRatio: false,
           plugins: {
@@ -152,19 +161,36 @@ export function BarChartCard({
             tooltip: {
               callbacks: formatValue
                 ? {
-                    label: (context) =>
-                      formatValue(Number(context.parsed.y ?? context.raw ?? 0)),
+                    label: (context) => {
+                      const parsed = context.parsed as { x?: number; y?: number } | number;
+                      const raw =
+                        typeof parsed === 'number'
+                          ? parsed
+                          : Number(parsed?.[horizontal ? 'x' : 'y'] ?? context.raw ?? 0);
+                      return formatValue(raw);
+                    },
                   }
                 : undefined,
             },
           },
           scales: {
-            x: { grid: { display: false } },
-            y: {
-              beginAtZero: true,
-              ticks: { precision: 0 },
-              grid: { color: 'rgba(148, 163, 184, 0.25)' },
-            },
+            x: horizontal
+              ? {
+                  beginAtZero: true,
+                  ticks: { precision: 0 },
+                  grid: { color: 'rgba(148, 163, 184, 0.25)' },
+                }
+              : { grid: { display: false } },
+            y: horizontal
+              ? {
+                  grid: { display: false },
+                  ticks: { autoSkip: false },
+                }
+              : {
+                  beginAtZero: true,
+                  ticks: { precision: 0 },
+                  grid: { color: 'rgba(148, 163, 184, 0.25)' },
+                },
           },
         }}
       />
@@ -177,6 +203,7 @@ type ArcChartProps = {
   labels: string[];
   values: number[];
   variant?: 'pie' | 'doughnut';
+  emptyMessage?: string;
 };
 
 export function ArcChartCard({
@@ -184,12 +211,17 @@ export function ArcChartCard({
   labels,
   values,
   variant = 'pie',
+  emptyMessage,
 }: ArcChartProps) {
   const ChartComponent = variant === 'doughnut' ? Doughnut : Pie;
   const total = values.reduce((sum, value) => sum + value, 0);
 
   return (
-    <ChartCard title={title} empty={labels.length === 0 || total === 0}>
+    <ChartCard
+      title={title}
+      empty={labels.length === 0 || total === 0}
+      emptyMessage={emptyMessage}
+    >
       <ChartComponent
         data={{
           labels,

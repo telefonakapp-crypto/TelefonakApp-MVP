@@ -4,6 +4,9 @@ import { useTheme } from '../../context/ThemeContext';
 import { fonts, radii, space, statusColors } from '../../utils/designTokens';
 
 const FALLBACK = '#7a848c';
+const STATUS_COLOR_ALIAS = {
+  bid_duration_ended: 'sold',
+};
 const DARK_STATUS_COLORS = {
   pending: '#fbbf24',
   approved: '#4ade80',
@@ -17,11 +20,12 @@ const DARK_STATUS_COLORS = {
 
 /**
  * Listing / offer status pill — soft tonal, not neon.
- * status: pending | approved | declined | sold | resubmitted | updated | deleted | hidden | custom
+ * status: pending | approved | declined | sold | resubmitted | updated | deleted | hidden | bid_duration_ended | custom
  */
 export function StatusBadge({ status, label, style, textStyle }) {
   const { statusColors: themeStatus, isDarkMode } = useTheme();
-  const key = String(status || '').toLowerCase();
+  const raw = String(status || '').toLowerCase();
+  const key = STATUS_COLOR_ALIAS[raw] || raw;
   const accent = isDarkMode
     ? DARK_STATUS_COLORS[key] || '#a8b0b6'
     : (themeStatus && themeStatus[key]) || statusColors[key] || FALLBACK;

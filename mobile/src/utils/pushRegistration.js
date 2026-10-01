@@ -1,12 +1,13 @@
 import { Platform, Settings } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Constants from 'expo-constants';
 import { requireOptionalNativeModule } from 'expo-modules-core';
 import apiClient from './api';
 import { getAuthToken } from './authSession';
+import { acquireNativePushRegistration } from './nativeDevicePushToken';
 
 const LOCAL_PREFERENCE_KEY = 'pushNotificationsEnabled';
 const LAST_TOKEN_KEY = 'expoPushToken';
+const NATIVE_REGISTRATION_KEY = 'nativePushRegistration';
 
 export function getLocalPreferenceKey() {
   return LOCAL_PREFERENCE_KEY;
@@ -43,15 +44,6 @@ function isNativePushModuleAvailable() {
     logPushSkip('native_module_check_failed', error);
     return false;
   }
-}
-
-function getExpoProjectId() {
-  return (
-    Constants.easConfig?.projectId ||
-    Constants.expoConfig?.extra?.eas?.projectId ||
-    process.env.EXPO_PUBLIC_EAS_PROJECT_ID ||
-    null
-  );
 }
 
 async function loadNotificationsModule() {
@@ -121,7 +113,45 @@ export async function registerDevicePushToken(expoPushToken) {
   return response.data.token;
 }
 
+async function readNativePushRegistration() {
+  const raw = await AsyncStorage.getItem(NATIVE_REGISTRATION_KEY);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      typeof parsed.device_token === 'string' &&
+      parsed.device_token &&
+      (parsed.provider === 'fcm' || parsed.provider === 'apns') &&
+      (parsed.platform === 'android' || parsed.platform === 'ios')
+    ) {
+      return parsed;
+    }
+  } catch {
+    // Ignore a corrupt local registration and clear it below.
+  }
+  await AsyncStorage.removeItem(NATIVE_REGISTRATION_KEY);
+  return null;
+}
+
 export async function deactivateDevicePushToken() {
+  const native = await readNativePushRegistration();
+  if (native) {
+    try {
+      await apiClient.delete('/notifications/push-token', {
+        data: {
+          device_token: native.device_token,
+          provider: native.provider,
+          platform: native.platform,
+        },
+      });
+    } catch (error) {
+      console.warn('Failed to deactivate push token', error?.message || 'failed');
+    } finally {
+      await AsyncStorage.removeItem(NATIVE_REGISTRATION_KEY);
+    }
+  }
+
   const token = await getRememberedDevicePushToken();
   if (!token) return;
   try {
@@ -129,71 +159,68 @@ export async function deactivateDevicePushToken() {
       data: { expo_push_token: token },
     });
   } catch (error) {
-    console.warn('Failed to deactivate push token', error?.message || error);
+    console.warn('Failed to deactivate push token', error?.message || 'failed');
   } finally {
     await clearRememberedDevicePushToken();
   }
 }
 
+async function registerNativePushToken(body) {
+  await apiClient.put('/notifications/push-token', {
+    device_token: body.device_token,
+    provider: body.provider,
+    platform: body.platform,
+  });
+  await AsyncStorage.setItem(
+    NATIVE_REGISTRATION_KEY,
+    JSON.stringify({
+      device_token: body.device_token,
+      provider: body.provider,
+      platform: body.platform,
+    })
+  );
+}
+
 /**
- * Register an Expo token when the user wants push AND iOS/Android has granted
- * permission. Does not open system Settings. requestPermission=false never
- * prompts (used on app start / login).
+ * Register the native token only when the saved Telefonak preference is on.
+ * Never throws.
+ */
+export async function syncEnabledPushRegistration({ requestPermission = false } = {}) {
+  try {
+    const enabled = await fetchPushPreference();
+    if (!enabled) return { registered: false, reason: 'preference_disabled' };
+    return await syncDevicePushRegistration({ requestPermission });
+  } catch {
+    return { registered: false, reason: 'registration_failed' };
+  }
+}
+
+/**
+ * Acquire a native device push token when the user wants push and permission
+ * is granted, then register it with the existing push-token endpoint.
+ * Does not open system Settings. requestPermission false never prompts.
  *
- * Never throws. Never PUTs a token unless Expo actually issued one.
+ * Android registers provider fcm. iOS registers provider apns for storage only.
+ * Expo token registration stays on registerDevicePushToken. The native
+ * registration is kept locally only so logout can deactivate that row.
+ * The token value is not logged.
+ *
+ * Never throws.
  */
 export async function syncDevicePushRegistration({ requestPermission = false } = {}) {
-  try {
-    const authToken = await getAuthToken();
-    if (!authToken) return { registered: false, reason: 'unauthenticated' };
-
-    if (!isNativePushModuleAvailable()) {
-      return { registered: false, reason: 'native_module_unavailable' };
+  return acquireNativePushRegistration(
+    { requestPermission },
+    {
+      getAuthToken,
+      isNativePushModuleAvailable,
+      isIosSimulator,
+      loadNotificationsModule,
+      logPushSkip,
+      registerNativePushToken,
+      isDev: typeof __DEV__ !== 'undefined' && __DEV__,
+      log(line) {
+        console.log(line);
+      },
     }
-
-    if (isIosSimulator()) {
-      logPushSkip('simulator');
-      return { registered: false, reason: 'simulator' };
-    }
-
-    const Notifications = await loadNotificationsModule();
-    if (!Notifications) {
-      return { registered: false, reason: 'native_module_unavailable' };
-    }
-
-    let status;
-    try {
-      status = (await Notifications.getPermissionsAsync()).status;
-      if (status !== 'granted' && requestPermission) {
-        status = (await Notifications.requestPermissionsAsync()).status;
-      }
-    } catch (error) {
-      logPushSkip('permission_unavailable', error);
-      return { registered: false, reason: 'permission_unavailable' };
-    }
-
-    if (status !== 'granted') {
-      logPushSkip('permission_denied');
-      return { registered: false, reason: 'permission_denied', status };
-    }
-
-    const projectId = getExpoProjectId();
-    if (!projectId) {
-      logPushSkip('no_project_id');
-      return { registered: false, reason: 'no_project_id' };
-    }
-
-    const tokenResponse = await Notifications.getExpoPushTokenAsync({ projectId });
-    const expoPushToken = tokenResponse?.data;
-    if (!expoPushToken || typeof expoPushToken !== 'string') {
-      logPushSkip('no_token');
-      return { registered: false, reason: 'no_token' };
-    }
-
-    await registerDevicePushToken(expoPushToken);
-    return { registered: true, token: expoPushToken };
-  } catch (error) {
-    logPushSkip('token_unavailable', error);
-    return { registered: false, reason: 'token_unavailable' };
-  }
+  );
 }

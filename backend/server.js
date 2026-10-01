@@ -9,6 +9,7 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/user');
 const phoneChangeRoutes = require('./routes/phoneChange');
 const listingsRoutes = require('./routes/listings');
+const listingBidsRoutes = require('./routes/listingBids');
 const adminAuthRoutes = require('./routes/adminAuth');
 const adminDashboardRoutes = require('./routes/adminDashboard');
 const adminListingsRoutes = require('./routes/adminListings');
@@ -31,6 +32,7 @@ const statusRoutes = require('./routes/status');
 const publicSettingsRoutes = require('./routes/publicSettings');
 const checkMaintenanceMode = require('./middleware/checkMaintenanceMode');
 const { isMaintenanceModeEnabled } = require('./utils/settings');
+const { startAuctionOneHourNoticeScheduler } = require('./utils/listingAuctions');
 
 try {
   validateEnv();
@@ -109,6 +111,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/profile/change-phone', phoneChangeRoutes);
 app.use('/api', listingsRoutes);
+app.use('/api', listingBidsRoutes);
 app.use('/api/admin/auth', adminAuthRoutes);
 app.use('/api/admin/dashboard', adminDashboardRoutes);
 app.use('/api/admin/listings', adminListingsRoutes);
@@ -171,6 +174,7 @@ async function start() {
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}`);
       console.log(`[env] NODE_ENV=${process.env.NODE_ENV || 'development'}`);
+      startAuctionOneHourNoticeScheduler(pool);
     });
   } catch (error) {
     console.error('[db] Refusing to start server because database initialization failed.');

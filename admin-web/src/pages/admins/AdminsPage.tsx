@@ -16,6 +16,7 @@ import {
 import { AdminForm } from '../../components/admins/AdminForm';
 import { ResetPasswordModal } from '../../components/admins/ResetPasswordModal';
 import { ConfirmModal } from '../../components/listings/ConfirmModal';
+import { NumberedPagination } from '../../components/pagination/NumberedPagination';
 import type {
   AdminFormValues,
   AdminListItem,
@@ -215,28 +216,12 @@ export function AdminsPage() {
                 Page {pagination.page} of {pagination.totalPages} ·{' '}
                 {pagination.totalItems.toLocaleString()} admins
               </p>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={page <= 1 || adminsQuery.isFetching}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  disabled={
-                    !pagination.totalPages ||
-                    page >= pagination.totalPages ||
-                    adminsQuery.isFetching
-                  }
-                  onClick={() => setPage((p) => p + 1)}
-                  className="rounded-md border border-slate-200 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-                >
-                  Next
-                </button>
-              </div>
+              <NumberedPagination
+                page={page}
+                totalPages={pagination.totalPages}
+                onPageChange={setPage}
+                disabled={adminsQuery.isFetching}
+              />
             </div>
           ) : null}
         </>

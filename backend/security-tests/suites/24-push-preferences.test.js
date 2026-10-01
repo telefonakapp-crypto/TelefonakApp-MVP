@@ -19,6 +19,10 @@ const {
   setPushTransport,
   resetPushTransport,
 } = require('../../utils/pushDelivery');
+const {
+  setFirebaseMessaging,
+  resetFirebaseAdminForTests,
+} = require('../../utils/firebaseAdmin');
 
 function fakeExpoToken(suffix) {
   return `ExponentPushToken[telefonak-test-${suffix}]`;
@@ -30,6 +34,7 @@ describe('24 — Push notification preference', () => {
   let otherToken;
   let createdNotificationIds = [];
   const createdTokens = [];
+  const createdDeviceTokens = [];
 
   before(async () => {
     fx = await loadFixtures();
@@ -43,10 +48,12 @@ describe('24 — Push notification preference', () => {
 
   beforeEach(() => {
     resetPushTransport();
+    resetFirebaseAdminForTests();
   });
 
   after(async () => {
     resetPushTransport();
+    resetFirebaseAdminForTests();
     if (createdNotificationIds.length > 0) {
       await pool.query(`DELETE FROM notifications WHERE id = ANY($1::int[])`, [
         createdNotificationIds,
@@ -56,6 +63,12 @@ describe('24 — Push notification preference', () => {
       await pool.query(
         `DELETE FROM user_push_tokens WHERE expo_push_token = ANY($1::text[])`,
         [createdTokens]
+      );
+    }
+    if (createdDeviceTokens.length > 0) {
+      await pool.query(
+        `DELETE FROM user_push_tokens WHERE device_token = ANY($1::text[])`,
+        [createdDeviceTokens]
       );
     }
     await pool.query(
@@ -434,6 +447,353 @@ describe('24 — Push notification preference', () => {
     });
     assert.equal(skipped.reason, 'preference_disabled');
     assert.equal(transportCalls, 0);
+
+    await pool.query(
+      `UPDATE users SET push_notifications_enabled = TRUE WHERE id = $1`,
+      [fx.owner.id]
+    );
+  });
+
+  it('registers an FCM token', async () => {
+    const deviceToken = 'telefonak-test-fcm-register';
+    createdDeviceTokens.push(deviceToken);
+    const res = await api('PUT', '/notifications/push-token', {
+      token: ownerToken,
+      body: { device_token: deviceToken, provider: 'fcm', platform: 'android' },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.token.user_id, fx.owner.id);
+    assert.equal(res.data.token.provider, 'fcm');
+    assert.equal(res.data.token.platform, 'android');
+    assert.equal(res.data.token.device_token, deviceToken);
+    assert.equal(res.data.token.is_active, true);
+    assert.equal(res.data.token.expo_push_token, undefined);
+  });
+
+  it('registers an APNs token', async () => {
+    const deviceToken = 'telefonak-test-apns-register';
+    createdDeviceTokens.push(deviceToken);
+    const res = await api('PUT', '/notifications/push-token', {
+      token: ownerToken,
+      body: { device_token: deviceToken, provider: 'apns', platform: 'ios' },
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.data.token.provider, 'apns');
+    assert.equal(res.data.token.platform, 'ios');
+    assert.equal(res.data.token.device_token, deviceToken);
+    assert.equal(res.data.token.user_id, fx.owner.id);
+  });
+
+  it('rejects an FCM token registered as ios', async () => {
+    const res = await api('PUT', '/notifications/push-token', {
+      token: ownerToken,
+      body: {
+        device_token: 'telefonak-test-fcm-ios-mismatch',
+        provider: 'fcm',
+        platform: 'ios',
+      },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.data.error, 'FCM tokens require platform android');
+  });
+
+  it('rejects an APNs token registered as android', async () => {
+    const res = await api('PUT', '/notifications/push-token', {
+      token: ownerToken,
+      body: {
+        device_token: 'telefonak-test-apns-android-mismatch',
+        provider: 'apns',
+        platform: 'android',
+      },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.data.error, 'APNs tokens require platform ios');
+  });
+
+  it('rejects an empty native token', async () => {
+    const res = await api('PUT', '/notifications/push-token', {
+      token: ownerToken,
+      body: { device_token: '   ', provider: 'fcm', platform: 'android' },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.data.error, 'Invalid device token');
+  });
+
+  it('rejects native registration without a provider', async () => {
+    const res = await api('PUT', '/notifications/push-token', {
+      token: ownerToken,
+      body: { device_token: 'telefonak-test-fcm-no-provider', platform: 'android' },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.data.error, 'provider is required');
+  });
+
+  it('rejects native registration without a platform', async () => {
+    const res = await api('PUT', '/notifications/push-token', {
+      token: ownerToken,
+      body: { device_token: 'telefonak-test-fcm-no-platform', provider: 'fcm' },
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.data.error, 'platform is required');
+  });
+
+  it('does not duplicate a native token registered twice', async () => {
+    const deviceToken = 'telefonak-test-fcm-idempotent';
+    createdDeviceTokens.push(deviceToken);
+    const body = { device_token: deviceToken, provider: 'fcm', platform: 'android' };
+    const first = await api('PUT', '/notifications/push-token', { token: ownerToken, body });
+    const second = await api('PUT', '/notifications/push-token', { token: ownerToken, body });
+    assert.equal(first.status, 200);
+    assert.equal(second.status, 200);
+    assert.equal(second.data.token.id, first.data.token.id);
+
+    const rows = await pool.query(
+      `SELECT id FROM user_push_tokens WHERE device_token = $1`,
+      [deviceToken]
+    );
+    assert.equal(rows.rows.length, 1);
+  });
+
+  it('reassigns a native token to the latest authenticated user', async () => {
+    const deviceToken = 'telefonak-test-fcm-reassign';
+    createdDeviceTokens.push(deviceToken);
+    const body = { device_token: deviceToken, provider: 'fcm', platform: 'android' };
+    const first = await api('PUT', '/notifications/push-token', { token: ownerToken, body });
+    assert.equal(first.status, 200);
+    const second = await api('PUT', '/notifications/push-token', { token: otherToken, body });
+    assert.equal(second.status, 200);
+    assert.equal(second.data.token.user_id, fx.stranger.id);
+
+    const rows = await pool.query(
+      `SELECT user_id, is_active FROM user_push_tokens WHERE device_token = $1`,
+      [deviceToken]
+    );
+    assert.equal(rows.rows.length, 1);
+    assert.equal(rows.rows[0].user_id, fx.stranger.id);
+    assert.equal(rows.rows[0].is_active, true);
+  });
+
+  it('deactivates only the authenticated user native token', async () => {
+    const deviceToken = 'telefonak-test-apns-logout';
+    createdDeviceTokens.push(deviceToken);
+    const body = { device_token: deviceToken, provider: 'apns', platform: 'ios' };
+    await api('PUT', '/notifications/push-token', { token: ownerToken, body });
+
+    const stranger = await api('DELETE', '/notifications/push-token', {
+      token: otherToken,
+      body,
+    });
+    assert.equal(stranger.status, 200);
+    assert.equal(stranger.data.deactivated, 0);
+
+    const stillActive = await pool.query(
+      `SELECT user_id, is_active FROM user_push_tokens WHERE device_token = $1`,
+      [deviceToken]
+    );
+    assert.equal(stillActive.rows.length, 1);
+    assert.equal(stillActive.rows[0].user_id, fx.owner.id);
+    assert.equal(stillActive.rows[0].is_active, true);
+
+    const owner = await api('DELETE', '/notifications/push-token', {
+      token: ownerToken,
+      body,
+    });
+    assert.equal(owner.status, 200);
+    assert.equal(owner.data.deactivated, 1);
+    const row = await pool.query(
+      `SELECT is_active FROM user_push_tokens WHERE device_token = $1`,
+      [deviceToken]
+    );
+    assert.equal(row.rows.length, 1);
+    assert.equal(row.rows[0].is_active, false);
+  });
+
+  it('keeps a legacy Expo row with a null provider deliverable', async () => {
+    const tokenValue = fakeExpoToken('legacy-null-provider');
+    createdTokens.push(tokenValue);
+    await clearUserTokens(fx.owner.id);
+    await pool.query(
+      `INSERT INTO user_push_tokens (user_id, expo_push_token, platform, is_active)
+       VALUES ($1, $2, 'ios', TRUE)`,
+      [fx.owner.id, tokenValue]
+    );
+    await pool.query(
+      `UPDATE users SET push_notifications_enabled = TRUE WHERE id = $1`,
+      [fx.owner.id]
+    );
+
+    let sentTo = null;
+    setPushTransport(async (messages) => {
+      sentTo = messages.map((row) => row.to);
+      return { data: messages.map(() => ({ status: 'ok' })) };
+    });
+
+    const result = await deliverPushForNotification(pool, {
+      userId: fx.owner.id,
+      title: 'Listing Approved',
+      message: 'Legacy Expo token',
+      data: { type: 'listing_approved', notification_id: 1, related_listing_id: 9 },
+    });
+    assert.equal(result.status, 'sent');
+    assert.equal(result.sent, 1);
+    assert.deepEqual(sentTo, [tokenValue]);
+  });
+
+  it('does not break inbox creation when native delivery is not configured', async () => {
+    const deviceToken = 'telefonak-test-fcm-not-configured';
+    createdDeviceTokens.push(deviceToken);
+    await clearUserTokens(fx.owner.id);
+    const registered = await registerPushToken(pool, {
+      userId: fx.owner.id,
+      deviceToken,
+      provider: 'fcm',
+      platform: 'android',
+    });
+    assert.equal(registered.token.provider, 'fcm');
+    await pool.query(
+      `UPDATE users SET push_notifications_enabled = TRUE WHERE id = $1`,
+      [fx.owner.id]
+    );
+
+    let transportCalls = 0;
+    setPushTransport(async () => {
+      transportCalls += 1;
+      return { data: [{ status: 'ok' }] };
+    });
+
+    const previousCredentials = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    resetFirebaseAdminForTests();
+    try {
+      const row = trackNotification(
+        await createNotification(pool, {
+          userId: fx.owner.id,
+          type: 'system',
+          title: 'Inbox stays',
+          message: 'Native push is not configured yet.',
+        })
+      );
+      assert.ok(row.id);
+      const stored = await pool.query(`SELECT id, title FROM notifications WHERE id = $1`, [row.id]);
+      assert.equal(stored.rows.length, 1);
+
+      const result = await deliverPushForNotification(pool, {
+        userId: fx.owner.id,
+        title: 'Inbox stays',
+        message: 'Native push is not configured yet.',
+      });
+      assert.equal(result.status, 'provider_not_configured');
+      assert.equal(result.provider, 'fcm');
+      assert.equal(transportCalls, 0);
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.equal(transportCalls, 0);
+      const stillThere = await pool.query(`SELECT id FROM notifications WHERE id = $1`, [row.id]);
+      assert.equal(stillThere.rows.length, 1);
+    } finally {
+      if (previousCredentials == null) delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      else process.env.GOOGLE_APPLICATION_CREDENTIALS = previousCredentials;
+      resetFirebaseAdminForTests();
+    }
+  });
+
+  it('leaves the inbox row when FCM delivery fails', async () => {
+    const deviceToken = 'telefonak-test-fcm-delivery-fails';
+    createdDeviceTokens.push(deviceToken);
+    await clearUserTokens(fx.owner.id);
+    await registerPushToken(pool, {
+      userId: fx.owner.id,
+      deviceToken,
+      provider: 'fcm',
+      platform: 'android',
+    });
+    await pool.query(
+      `UPDATE users SET push_notifications_enabled = TRUE WHERE id = $1`,
+      [fx.owner.id]
+    );
+    const previousCredentials = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    resetFirebaseAdminForTests();
+    setFirebaseMessaging({
+      sendEach: async () => {
+        throw Object.assign(new Error('temporary'), { code: 'messaging/internal-error' });
+      },
+    });
+    try {
+      const row = trackNotification(
+        await createNotification(pool, {
+          userId: fx.owner.id,
+          type: 'system',
+          title: 'Inbox survives FCM',
+          message: 'Push failure does not remove this row.',
+        })
+      );
+      assert.ok(row.id);
+
+      const result = await deliverPushForNotification(pool, {
+        userId: fx.owner.id,
+        title: 'Inbox survives FCM',
+        message: 'Push failure does not remove this row.',
+      });
+      assert.equal(result.status, 'failed');
+      assert.equal(result.provider, 'fcm');
+
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const stored = await pool.query(`SELECT id FROM notifications WHERE id = $1`, [row.id]);
+      assert.equal(stored.rows.length, 1);
+      const tokenRow = await pool.query(
+        `SELECT is_active FROM user_push_tokens WHERE device_token = $1`,
+        [deviceToken]
+      );
+      assert.equal(tokenRow.rows[0].is_active, true);
+    } finally {
+      if (previousCredentials == null) delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      else process.env.GOOGLE_APPLICATION_CREDENTIALS = previousCredentials;
+      resetFirebaseAdminForTests();
+    }
+  });
+
+  it('leaves the inbox row when a native token exists and push is disabled', async () => {
+    const deviceToken = 'telefonak-test-apns-preference-off';
+    createdDeviceTokens.push(deviceToken);
+    await clearUserTokens(fx.owner.id);
+    await registerPushToken(pool, {
+      userId: fx.owner.id,
+      deviceToken,
+      provider: 'apns',
+      platform: 'ios',
+    });
+    await pool.query(
+      `UPDATE users SET push_notifications_enabled = FALSE WHERE id = $1`,
+      [fx.owner.id]
+    );
+
+    let transportCalls = 0;
+    setPushTransport(async () => {
+      transportCalls += 1;
+      return { data: [{ status: 'ok' }] };
+    });
+
+    const row = trackNotification(
+      await createNotification(pool, {
+        userId: fx.owner.id,
+        type: 'system',
+        title: 'Preference off',
+        message: 'Inbox remains while native push is skipped.',
+      })
+    );
+    assert.ok(row.id);
+
+    const result = await deliverPushForNotification(pool, {
+      userId: fx.owner.id,
+      title: 'Preference off',
+      message: 'Inbox remains while native push is skipped.',
+    });
+    assert.equal(result.status, 'skipped');
+    assert.equal(result.reason, 'preference_disabled');
+    assert.equal(transportCalls, 0);
+    const stored = await pool.query(`SELECT id FROM notifications WHERE id = $1`, [row.id]);
+    assert.equal(stored.rows.length, 1);
 
     await pool.query(
       `UPDATE users SET push_notifications_enabled = TRUE WHERE id = $1`,

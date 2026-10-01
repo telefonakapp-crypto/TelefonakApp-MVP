@@ -98,6 +98,38 @@ describe('notification navigation destinations', () => {
     assert.equal(rejected.name, 'ListingDetails');
     assert.deepEqual(rejected.params, { listingId: 16 });
   });
+
+  it('opens bid_one_hour_remaining on Listing Details from related_listing_id', async () => {
+    const { resolveNotificationDestination } = await load();
+    const dest = resolveNotificationDestination({
+      type: 'bid_one_hour_remaining',
+      title: 'Bid ending soon',
+      related_listing_id: 88,
+    });
+    assert.equal(dest.name, 'ListingDetails');
+    assert.equal(dest.method, 'navigate');
+    assert.deepEqual(dest.params, { listingId: 88 });
+    assert.equal(Object.prototype.hasOwnProperty.call(dest.params, 'phone_number'), false);
+  });
+
+  it('still opens Listing Details for a stale Bid notification', async () => {
+    const { resolveNotificationDestination } = await load();
+    const dest = resolveNotificationDestination({
+      type: 'bid_one_hour_remaining',
+      title: 'Bid ending soon',
+      related_listing_id: '91',
+      message: 'Your Bid listing has about 1 hour remaining.',
+    });
+    assert.equal(dest.name, 'ListingDetails');
+    assert.deepEqual(dest.params, { listingId: 91 });
+    assert.equal(
+      resolveNotificationDestination({
+        type: 'bid_one_hour_remaining',
+        related_listing_id: null,
+      }),
+      null
+    );
+  });
 });
 
 describe('NotificationsScreen wiring (navigation only)', () => {
@@ -109,9 +141,86 @@ describe('NotificationsScreen wiring (navigation only)', () => {
   it('uses the destination helper and does not send every tap to Listing Details', () => {
     assert.match(src, /resolveNotificationDestination/);
     assert.match(src, /navigation\.push\(destination\.name, destination\.params\)/);
+    assert.match(src, /bid_one_hour_remaining/);
+    assert.match(src, /hammer-outline/);
+    assert.match(src, /localizeNotification/);
+    assert.doesNotMatch(src, /phone_number/);
+    assert.doesNotMatch(src, /openPhoneDialer/);
     assert.doesNotMatch(
       src,
       /if \(item\.related_listing_id\) \{\s*navigation\.navigate\('ListingDetails'/
     );
+  });
+
+  it('keeps inbox pagination, read APIs, refresh, and RTL helpers', () => {
+    assert.match(src, /const PAGE_SIZE = 20/);
+    assert.match(src, /apiClient\.get\('\/notifications'/);
+    assert.match(src, /apiClient\.patch\(`\/notifications\/\$\{id\}\/read`\)/);
+    assert.match(src, /apiClient\.patch\('\/notifications\/read-all'\)/);
+    assert.match(src, /useFocusEffect/);
+    assert.match(src, /getFlexDirection\(isRTL/);
+    assert.match(src, /getTextAlign\(isRTL/);
+    assert.doesNotMatch(src, /setInterval/);
+    assert.doesNotMatch(src, /bid_placed/);
+    assert.doesNotMatch(src, /outbid/);
+  });
+});
+
+describe('notification architecture reuse', () => {
+  const app = fs.readFileSync(path.resolve(__dirname, '../../../App.js'), 'utf8');
+  const context = fs.readFileSync(
+    path.resolve(__dirname, '../../context/NotificationsContext.js'),
+    'utf8'
+  );
+  const details = fs.readFileSync(
+    path.resolve(__dirname, '../../screens/ListingDetailsScreen.js'),
+    'utf8'
+  );
+  const srcRoot = path.resolve(__dirname, '../..');
+
+  function walkJs(dir) {
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name === '__tests__') return [];
+        return walkJs(full);
+      }
+      return entry.name.endsWith('.js') ? [full] : [];
+    });
+  }
+
+  it('reuses the existing provider and push registration', () => {
+    assert.equal((app.match(/NotificationsProvider/g) || []).length, 3);
+    assert.match(app, /import \{ NotificationsProvider \}/);
+    assert.match(context, /syncDevicePushRegistration/);
+    assert.match(context, /requestPermission: false/);
+    assert.match(context, /\/notifications\/unread-count/);
+    assert.doesNotMatch(context, /addNotificationResponseReceivedListener/);
+    assert.doesNotMatch(app, /addNotificationResponseReceivedListener/);
+  });
+
+  it('does not add a second notification context, scheduler, or fake Bid types', () => {
+    const files = walkJs(srcRoot);
+    const contexts = files.filter((file) =>
+      fs.readFileSync(file, 'utf8').includes('createContext(null)') &&
+      path.basename(file).toLowerCase().includes('notification')
+    );
+    assert.equal(contexts.length, 1);
+    const joined = files
+      .filter((file) => !file.includes('.test.js'))
+      .map((file) => fs.readFileSync(file, 'utf8'))
+      .join('\n');
+    assert.doesNotMatch(joined, /addNotificationResponseReceivedListener/);
+    assert.doesNotMatch(joined, /type: 'bid_placed'/);
+    assert.doesNotMatch(joined, /type: 'outbid'/);
+    assert.doesNotMatch(joined, /type: 'bid_won'/);
+  });
+
+  it('lets Listing Details refetch current auction state after a stale Bid tap', () => {
+    assert.match(details, /useFocusEffect/);
+    assert.match(details, /fetchListingDetails/);
+    assert.match(details, /apiClient\.get\(`\/listings\/\$\{listingId\}`\)/);
+    assert.doesNotMatch(details, /bid_one_hour_remaining/);
+    assert.doesNotMatch(details, /can_end_bid.*notification/);
   });
 });

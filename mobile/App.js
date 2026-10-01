@@ -40,13 +40,14 @@ import TermsOfUseScreen from './src/screens/TermsOfUseScreen';
 import HelpScreen from './src/screens/HelpScreen';
 import ContactUsScreen from './src/screens/ContactUsScreen';
 import SavedListingsScreen from './src/screens/SavedListingsScreen';
+import BidsScreen from './src/screens/BidsScreen';
+import ReceivedListingBidsScreen from './src/screens/ReceivedListingBidsScreen';
 import MyOffersScreen from './src/screens/MyOffersScreen';
 import ReceivedOffersScreen from './src/screens/ReceivedOffersScreen';
 import OffersScreen from './src/screens/OffersScreen';
 import ChangePhoneScreen from './src/screens/ChangePhoneScreen';
 import DeleteAccountScreen from './src/screens/DeleteAccountScreen';
 import MaintenanceScreen from './src/screens/MaintenanceScreen';
-import ImagePickerDiagnosticScreen from './src/screens/ImagePickerDiagnosticScreen';
 import { ToastHost } from './src/utils/toast';
 import { resolveStoredSession } from './src/utils/authSession';
 import { ensureNativeLayoutIsLTR } from './src/utils/layoutDirection';
@@ -299,16 +300,17 @@ function AppNavigatorWrapper({ initialRoute, registrationToken }) {
         <Stack.Screen name="Help" component={HelpScreen} options={defaultScreenOptions} />
         <Stack.Screen name="ContactUs" component={ContactUsScreen} options={defaultScreenOptions} />
         <Stack.Screen name="SavedListings" component={SavedListingsScreen} options={defaultScreenOptions} />
+        <Stack.Screen name="Bids" component={BidsScreen} options={defaultScreenOptions} />
+        <Stack.Screen
+          name="ReceivedListingBids"
+          component={ReceivedListingBidsScreen}
+          options={defaultScreenOptions}
+        />
         <Stack.Screen name="Offers" component={OffersScreen} options={defaultScreenOptions} />
         <Stack.Screen name="MyOffers" component={MyOffersScreen} options={defaultScreenOptions} />
         <Stack.Screen name="ReceivedOffers" component={ReceivedOffersScreen} options={defaultScreenOptions} />
         <Stack.Screen name="ChangePhone" component={ChangePhoneScreen} options={defaultScreenOptions} />
         <Stack.Screen name="DeleteAccount" component={DeleteAccountScreen} options={defaultScreenOptions} />
-        <Stack.Screen
-          name="ImagePickerDiagnostic"
-          component={ImagePickerDiagnosticScreen}
-          options={{ headerShown: false }}
-        />
       </Stack.Navigator>
     </NavigationContainer>
   );

@@ -317,28 +317,6 @@ export default function SettingsScreen() {
             </View>
           </View>
 
-          {__DEV__ ? (
-            <TouchableOpacity
-              style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}
-              onPress={() => navigation.navigate('ImagePickerDiagnostic')}
-              accessibilityRole="button"
-              accessibilityLabel="ImagePicker Diagnostic"
-            >
-              <View style={[styles.settingInfo, getFlexDirection(isRTL, 'row')]}>
-                <Ionicons
-                  name="bug-outline"
-                  size={24}
-                  color={colors.text}
-                  style={{ marginRight: isRTL ? 0 : 12, marginLeft: isRTL ? 12 : 0 }}
-                />
-                <Text style={[styles.settingLabel, { color: colors.text }, getTextAlign(isRTL, 'auto')]}>
-                  ImagePicker Diagnostic
-                </Text>
-              </View>
-              <Ionicons name={isRTL ? 'chevron-back' : 'chevron-forward'} size={20} color={colors.textSecondary} />
-            </TouchableOpacity>
-          ) : null}
-
           <TouchableOpacity
             style={[styles.settingItem, { backgroundColor: colors.card }, ambientElevation, getFlexDirection(isRTL, 'row')]}
             onPress={() => navigation.navigate('ContactUs')}

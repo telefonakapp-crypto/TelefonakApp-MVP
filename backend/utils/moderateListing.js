@@ -21,6 +21,7 @@ const {
 } = require('./listingStatus');
 const { writeAuditLog } = require('./auditLog');
 const { recordListingModerationEvent, EVENT_TYPE } = require('./listingModerationEvents');
+const { startAuctionIfBidListing, LISTING_SALE_TYPE } = require('./listingAuctions');
 
 function allowedSourceStatusesFor(targetStatus) {
   if (targetStatus === LISTING_STATUS.APPROVED) {
@@ -64,7 +65,10 @@ async function moderateListing(req, res, { status, message, requireReason = fals
   }
 
   try {
-    const current = await pool.query('SELECT status FROM listings WHERE id = $1', [id]);
+    const current = await pool.query(
+      'SELECT status, sale_type FROM listings WHERE id = $1',
+      [id]
+    );
 
     if (current.rows.length === 0) {
       return res.status(404).json({ error: 'Listing not found' });
@@ -102,9 +106,9 @@ async function moderateListing(req, res, { status, message, requireReason = fals
 
     const moderatorId = req.adminId || null;
     const allowedSources = allowedSourceStatusesFor(status);
+    const currentSaleType = current.rows[0].sale_type || LISTING_SALE_TYPE.NORMAL;
 
-    const result = await pool.query(
-      `UPDATE listings
+    const updateSql = `UPDATE listings
        SET status = $1,
            decline_reason = $2,
            approved_or_rejected_at = CURRENT_TIMESTAMP,
@@ -112,15 +116,42 @@ async function moderateListing(req, res, { status, message, requireReason = fals
            resubmitted_at = NULL,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = $4 AND status = ANY($5::text[])
-       RETURNING *`,
-      [status, declineReason, moderatorId, id, allowedSources]
-    );
+       RETURNING *`;
+    const updateParams = [status, declineReason, moderatorId, id, allowedSources];
 
-    if (result.rows.length === 0) {
-      return res.status(409).json({ error: 'Listing status changed, please try again' });
+    let listing;
+    if (status === LISTING_STATUS.APPROVED && currentSaleType === LISTING_SALE_TYPE.BID) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const result = await client.query(updateSql, updateParams);
+        if (result.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ error: 'Listing status changed, please try again' });
+        }
+        listing = result.rows[0];
+        await startAuctionIfBidListing(client, {
+          listingId: listing.id,
+          saleType: listing.sale_type,
+        });
+        await client.query('COMMIT');
+      } catch (txError) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // ignore rollback errors
+        }
+        throw txError;
+      } finally {
+        client.release();
+      }
+    } else {
+      const result = await pool.query(updateSql, updateParams);
+      if (result.rows.length === 0) {
+        return res.status(409).json({ error: 'Listing status changed, please try again' });
+      }
+      listing = result.rows[0];
     }
-
-    const listing = result.rows[0];
     const decliningApproved =
       status === LISTING_STATUS.DECLINED &&
       currentStatus === LISTING_STATUS.APPROVED;
@@ -192,6 +223,9 @@ async function moderateListing(req, res, { status, message, requireReason = fals
     res.json({ message, listing });
   } catch (error) {
     console.error(`Error setting listing status to ${status}:`, error);
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
     res.status(500).json({
       error: `Failed to ${status === LISTING_STATUS.APPROVED ? 'approve' : 'decline'} listing`,
     });

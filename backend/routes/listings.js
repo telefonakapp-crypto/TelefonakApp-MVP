@@ -47,6 +47,25 @@ const {
   freezeCurrentListingRevision,
   EVENT_TYPE,
 } = require('../utils/listingModerationEvents');
+const {
+  LISTING_SALE_TYPE,
+  parseListingSaleType,
+  isBidSaleType,
+  assertAuctionDurationHours,
+  assertAuctionStartingPrice,
+  createListingAuction,
+  startAuctionIfBidListing,
+  syncPendingAuction,
+  getAuctionByListingId,
+  assertAuctionNotLive,
+  materializeExpiredAuction,
+  expireDueAuctionsForOwner,
+} = require('../utils/listingAuctions');
+const {
+  attachMarketplaceAuction,
+  attachOwnerAuction,
+  withAuctionForViewer,
+} = require('../utils/listingAuctionSummary');
 
 const MAX_LISTING_IMAGES = 10;
 
@@ -136,6 +155,7 @@ router.post('/listings', verifyToken,
     body('model_watch_case_size_id').optional({ nullable: true }).isInt().withMessage('Invalid case size'),
     body('model_watch_connectivity_id').optional({ nullable: true }).isInt().withMessage('Invalid connectivity option'),
     body('condition_id').isInt().withMessage('Condition ID is required'),
+    body('sale_type').optional({ nullable: true }).isIn(['normal', 'bid']).withMessage('sale_type must be normal or bid'),
     body('price').isFloat({ min: 0.01 }).withMessage('Price must be greater than 0'),
     // Mobile sends null for optional empties (New condition has no battery, blank description/location).
     // express-validator optional() skips undefined only unless nullable: true.
@@ -160,6 +180,24 @@ router.post('/listings', verifyToken,
       } catch (error) {
         if (error.statusCode === 400) {
           return res.status(400).json({ error: error.message });
+        }
+        throw error;
+      }
+
+      let saleType;
+      let durationHours = null;
+      try {
+        saleType = parseListingSaleType(req.body.sale_type);
+        if (isBidSaleType(saleType)) {
+          assertAuctionStartingPrice(req.body.price);
+          durationHours = assertAuctionDurationHours(req.body.duration_hours);
+        }
+      } catch (error) {
+        if (error.statusCode) {
+          return res.status(error.statusCode).json({
+            error: error.message,
+            ...(error.code ? { code: error.code } : {}),
+          });
         }
         throw error;
       }
@@ -253,27 +291,56 @@ router.post('/listings', verifyToken,
       // Live Admin setting — no restart required when toggled.
       const initialStatus = await resolveListingModerationStatus();
 
-      const listingResult = await pool.query(
-        `INSERT INTO listings
+      const insertSql = `INSERT INTO listings
            (user_id, model_id, storage_id, color_id, model_storage_id, model_color_id,
             sim_configuration_id, model_watch_case_size_id, model_watch_connectivity_id,
             condition_id, battery_percentage, price, description, location,
             city_id, area_id, status, decline_reason, approved_or_rejected_at, moderated_by_admin_id,
             category_id, listing_source, custom_brand_name, custom_model_name, custom_storage,
-            custom_color_name, custom_sim_configuration, custom_case_size, custom_connectivity)
+            custom_color_name, custom_sim_configuration, custom_case_size, custom_connectivity,
+            sale_type)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NULL,
                  CASE WHEN $17::varchar = 'approved' THEN CURRENT_TIMESTAMP ELSE NULL END,
-                 NULL, $18, $19, $20, $21, $22, $23, $24, $25, $26)
-         RETURNING *`,
-        [userId, model_id, storage_id, color_id, model_storage_id, model_color_id,
-         sim_configuration_id, model_watch_case_size_id, model_watch_connectivity_id,
-         condition_id, battery_percentage || null, price, description || null,
-         resolvedLocation, resolvedCityId, resolvedAreaId, initialStatus,
-         listingCategoryId, listing_source, custom_brand_name, custom_model_name, custom_storage,
-         custom_color_name, custom_sim_configuration, custom_case_size, custom_connectivity]
-      );
+                 NULL, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+         RETURNING *`;
+      const insertParams = [
+        userId, model_id, storage_id, color_id, model_storage_id, model_color_id,
+        sim_configuration_id, model_watch_case_size_id, model_watch_connectivity_id,
+        condition_id, battery_percentage || null, price, description || null,
+        resolvedLocation, resolvedCityId, resolvedAreaId, initialStatus,
+        listingCategoryId, listing_source, custom_brand_name, custom_model_name, custom_storage,
+        custom_color_name, custom_sim_configuration, custom_case_size, custom_connectivity,
+        saleType,
+      ];
 
-      const listing = listingResult.rows[0];
+      let listing;
+      if (isBidSaleType(saleType)) {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          const listingResult = await client.query(insertSql, insertParams);
+          listing = listingResult.rows[0];
+          await createListingAuction(client, {
+            listingId: listing.id,
+            startingPrice: price,
+            durationHours,
+            start: listing.status === LISTING_STATUS.APPROVED,
+          });
+          await client.query('COMMIT');
+        } catch (txError) {
+          try {
+            await client.query('ROLLBACK');
+          } catch {
+            // ignore rollback errors
+          }
+          throw txError;
+        } finally {
+          client.release();
+        }
+      } else {
+        const listingResult = await pool.query(insertSql, insertParams);
+        listing = listingResult.rows[0];
+      }
 
       // Insert required listing images (public URLs from the upload endpoint)
       for (let i = 0; i < imageUrls.length; i++) {
@@ -321,7 +388,7 @@ router.post('/listings', verifyToken,
       }
 
       // Keep the create response shape stable for mobile (omit seller_* join fields).
-      const listingResponse = { ...listingDetails };
+      const listingResponse = attachOwnerAuction({ ...listingDetails });
       delete listingResponse.seller_first_name;
       delete listingResponse.seller_last_name;
 
@@ -331,6 +398,12 @@ router.post('/listings', verifyToken,
       });
     } catch (error) {
       console.error('Error creating listing:', error);
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({
+          error: error.message,
+          ...(error.code ? { code: error.code } : {}),
+        });
+      }
       res.status(500).json({ error: 'Failed to create listing' });
     }
   }
@@ -397,7 +470,7 @@ router.get('/listings', async (req, res) => {
         offset,
       });
 
-      res.json({ listings: result.rows.map(withoutViewCount) });
+      res.json({ listings: result.rows.map((row) => withoutViewCount(attachMarketplaceAuction(row))) });
     } catch (dbError) {
       if (dbError.message && dbError.message.includes('does not exist')) {
         console.warn('Listings tables not found. Please run database initialization.');
@@ -426,9 +499,10 @@ router.get('/listings/user/my', verifyToken, async (req, res) => {
       return res.status(401).json({ error: 'User ID not found in token' });
     }
 
+    await expireDueAuctionsForOwner(pool, userId);
     const result = await fetchOwnerMyListings(pool, userId);
 
-    res.json({ listings: result.rows });
+    res.json({ listings: result.rows.map(attachOwnerAuction) });
   } catch (error) {
     console.error('Error fetching user listings:', error);
     res.status(500).json({ error: 'Failed to fetch user listings' });
@@ -439,12 +513,26 @@ router.get('/listings/user/my', verifyToken, async (req, res) => {
 router.get('/listings/:id', optionalAuth, async (req, res) => {
   try {
     const { id } = req.params;
+    const viewerUserId = req.user?.userId || 0;
 
-    // Get listing details
-    const listingResult = await fetchListingRowById(pool, id);
+    let listingResult = await fetchListingRowById(pool, id, { viewerUserId });
 
     if (listingResult.rows.length === 0) {
       return res.status(404).json({ error: 'Listing not found' });
+    }
+
+    if (isBidSaleType(listingResult.rows[0].sale_type)) {
+      try {
+        await materializeExpiredAuction(pool, listingResult.rows[0].id);
+      } catch (expireError) {
+        if (!expireError || expireError.code !== 'AUCTION_WINNER_TIE') {
+          throw expireError;
+        }
+      }
+      listingResult = await fetchListingRowById(pool, id, { viewerUserId });
+      if (listingResult.rows.length === 0) {
+        return res.status(404).json({ error: 'Listing not found' });
+      }
     }
 
     // Get listing images
@@ -524,10 +612,12 @@ router.get('/listings/:id', optionalAuth, async (req, res) => {
       }
     }
 
+    const listingWithAuction = withAuctionForViewer(listing, req.user?.userId);
+
     res.json({
       // is_owner saves the client a separate profile request to decide what to show
       listing: {
-        ...(isOwner ? listing : withoutViewCount(listing)),
+        ...(isOwner ? listingWithAuction : withoutViewCount(listingWithAuction)),
         is_owner: isOwner,
         ...buyerOfferFields,
       },
@@ -596,6 +686,8 @@ router.put('/listings/:id/mark-sold', verifyToken, async (req, res) => {
       return res.status(403).json({ error: 'Not authorized to mark this listing as sold' });
     }
 
+    await assertAuctionNotLive(pool, id);
+
     // A terminal listing is a wrong-state conflict rather than a bad request,
     // and is reported the same way by every transition in this file.
     const currentStatus = checkResult.rows[0].status;
@@ -635,6 +727,12 @@ router.put('/listings/:id/mark-sold', verifyToken, async (req, res) => {
     });
   } catch (error) {
     console.error('Error marking listing as sold:', error);
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
+      });
+    }
     res.status(500).json({ error: 'Failed to mark listing as sold' });
   }
 });
@@ -666,6 +764,8 @@ const setListingVisibility = async (req, res, { from, to, notify }) => {
     if (existing.rows[0].user_id !== userId) {
       return res.status(403).json({ error: 'Not authorized to change this listing' });
     }
+
+    await assertAuctionNotLive(pool, listingId);
 
     if (isTerminalListingStatus(existing.rows[0].status)) {
       return res.status(409).json({
@@ -704,6 +804,12 @@ const setListingVisibility = async (req, res, { from, to, notify }) => {
     res.json({ listing: result.rows[0] });
   } catch (error) {
     console.error(`Error setting listing status to ${to}:`, error);
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
+      });
+    }
     res.status(500).json({ error: 'Failed to update listing visibility' });
   }
 };
@@ -745,6 +851,7 @@ router.put('/listings/:id', verifyToken,
     body('model_watch_case_size_id').optional({ nullable: true }).isInt().withMessage('Invalid case size'),
     body('model_watch_connectivity_id').optional({ nullable: true }).isInt().withMessage('Invalid connectivity option'),
     body('condition_id').isInt().withMessage('Condition ID is required'),
+    body('sale_type').optional({ nullable: true }).isIn(['normal', 'bid']).withMessage('sale_type must be normal or bid'),
     body('price').isFloat({ min: 0.01 }).withMessage('Price must be greater than 0'),
     body('battery_percentage').optional({ nullable: true }).isInt({ min: 70, max: 100 }).withMessage('Battery percentage must be between 70 and 100'),
     body('description').optional({ nullable: true }).isString(),
@@ -778,7 +885,7 @@ router.put('/listings/:id', verifyToken,
 
       // Verify the listing exists and belongs to the current user
       const checkResult = await pool.query(
-        `SELECT user_id, status, revision_number, root_listing_id, previous_listing_id
+        `SELECT user_id, status, revision_number, root_listing_id, previous_listing_id, sale_type
          FROM listings WHERE id = $1`,
         [id]
       );
@@ -790,6 +897,8 @@ router.put('/listings/:id', verifyToken,
       if (checkResult.rows[0].user_id !== userId) {
         return res.status(403).json({ error: 'Not authorized to edit this listing' });
       }
+
+      await assertAuctionNotLive(pool, id);
 
       // Terminal listings (sold, deleted) can no longer be edited
       const currentListing = checkResult.rows[0];
@@ -932,6 +1041,32 @@ router.put('/listings/:id', verifyToken,
         custom_connectivity,
       ];
 
+      const existingSaleType = currentListing.sale_type || LISTING_SALE_TYPE.NORMAL;
+      let bidDurationHours = null;
+      if (isBidSaleType(existingSaleType)) {
+        try {
+          assertAuctionStartingPrice(price);
+          if (req.body.duration_hours != null && req.body.duration_hours !== '') {
+            bidDurationHours = assertAuctionDurationHours(req.body.duration_hours);
+          } else {
+            const existingAuction = await getAuctionByListingId(pool, parseInt(id, 10));
+            if (existingAuction) {
+              bidDurationHours = Number(existingAuction.duration_hours);
+            } else {
+              bidDurationHours = assertAuctionDurationHours(req.body.duration_hours);
+            }
+          }
+        } catch (error) {
+          if (error.statusCode) {
+            return res.status(error.statusCode).json({
+              error: error.message,
+              ...(error.code ? { code: error.code } : {}),
+            });
+          }
+          throw error;
+        }
+      }
+
       // Declined tip → INSERT immutable snapshot revision (parent never mutates).
       // Already-resubmitted / already-updated tip → in-place UPDATE, same queue status.
       // Approved tip → in-place UPDATE to updated (awaiting moderation).
@@ -950,10 +1085,10 @@ router.put('/listings/:id', verifyToken,
                 city_id, area_id, category_id, listing_source, custom_brand_name, custom_model_name,
                 custom_storage, custom_color_name, custom_sim_configuration, custom_case_size,
                 custom_connectivity, status, decline_reason, approved_or_rejected_at, moderated_by_admin_id,
-                resubmitted_at, previous_listing_id, revision_number, root_listing_id)
+                resubmitted_at, previous_listing_id, revision_number, root_listing_id, sale_type)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
                      $17, $18, $19, $20, $21, $22, $23, $24, $25, $26,
-                     NULL, NULL, NULL, CURRENT_TIMESTAMP, $27, $28, $29)
+                     NULL, NULL, NULL, CURRENT_TIMESTAMP, $27, $28, $29, $30)
              RETURNING *`,
             [
               userId,
@@ -962,6 +1097,7 @@ router.put('/listings/:id', verifyToken,
               parseInt(id, 10),
               (currentListing.revision_number || 1) + 1,
               currentListing.root_listing_id || parseInt(id, 10),
+              existingSaleType,
             ]
           );
 
@@ -996,6 +1132,15 @@ router.put('/listings/:id', verifyToken,
                VALUES ($1, $2, $3)`,
               [newListingId, copiedUrl, i]
             );
+          }
+
+          if (isBidSaleType(existingSaleType)) {
+            await createListingAuction(client, {
+              listingId: newListingId,
+              startingPrice: price,
+              durationHours: bidDurationHours,
+              start: false,
+            });
           }
 
           await client.query('COMMIT');
@@ -1055,7 +1200,7 @@ router.put('/listings/:id', verifyToken,
           price: listingDetails.price,
         });
 
-        const listingResponse = { ...listingDetails };
+        const listingResponse = attachOwnerAuction({ ...listingDetails });
         delete listingResponse.seller_first_name;
         delete listingResponse.seller_last_name;
 
@@ -1207,6 +1352,13 @@ router.put('/listings/:id', verifyToken,
            WHERE id = $26 AND user_id = $27`,
           [...listingFieldValues, nextStatus, id, userId]
         );
+        if (isBidSaleType(existingSaleType)) {
+          await syncPendingAuction(pool, {
+            listingId: parseInt(id, 10),
+            startingPrice: price,
+            durationHours: bidDurationHours,
+          });
+        }
       } else if (isQueueStayEdit) {
         await pool.query(
           `UPDATE listings
@@ -1243,6 +1395,75 @@ router.put('/listings/:id', verifyToken,
            WHERE id = $26 AND user_id = $27`,
           [...listingFieldValues, nextStatus, id, userId]
         );
+        if (isBidSaleType(existingSaleType)) {
+          await syncPendingAuction(pool, {
+            listingId: parseInt(id, 10),
+            startingPrice: price,
+            durationHours: bidDurationHours,
+          });
+        }
+      } else if (isBidSaleType(existingSaleType) && nextStatus === LISTING_STATUS.APPROVED) {
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query(
+            `UPDATE listings
+             SET model_id              = $1,
+                 storage_id            = $2,
+                 color_id              = $3,
+                 model_storage_id      = $4,
+                 model_color_id        = $5,
+                 sim_configuration_id  = $6,
+                 model_watch_case_size_id = $7,
+                 model_watch_connectivity_id = $8,
+                 condition_id          = $9,
+                 battery_percentage    = $10,
+                 price                 = $11,
+                 description           = $12,
+                 location              = $13,
+                 city_id               = $14,
+                 area_id               = $15,
+                 category_id           = $16,
+                 listing_source        = $17,
+                 custom_brand_name     = $18,
+                 custom_model_name     = $19,
+                 custom_storage        = $20,
+                 custom_color_name     = $21,
+                 custom_sim_configuration = $22,
+                 custom_case_size      = $23,
+                 custom_connectivity   = $24,
+                 status                = $25,
+                 decline_reason        = NULL,
+                 approved_or_rejected_at = CASE
+                   WHEN $25::varchar = 'approved' THEN CURRENT_TIMESTAMP
+                   ELSE NULL
+                 END,
+                 moderated_by_admin_id = NULL,
+                 resubmitted_at        = NULL,
+                 updated_at            = CURRENT_TIMESTAMP
+             WHERE id = $26 AND user_id = $27`,
+            [...listingFieldValues, nextStatus, id, userId]
+          );
+          await syncPendingAuction(client, {
+            listingId: parseInt(id, 10),
+            startingPrice: price,
+            durationHours: bidDurationHours,
+          });
+          await startAuctionIfBidListing(client, {
+            listingId: parseInt(id, 10),
+            saleType: existingSaleType,
+          });
+          await client.query('COMMIT');
+        } catch (txError) {
+          try {
+            await client.query('ROLLBACK');
+          } catch {
+            // ignore
+          }
+          throw txError;
+        } finally {
+          client.release();
+        }
       } else {
         await pool.query(
           `UPDATE listings
@@ -1282,6 +1503,13 @@ router.put('/listings/:id', verifyToken,
            WHERE id = $26 AND user_id = $27`,
           [...listingFieldValues, nextStatus, id, userId]
         );
+        if (isBidSaleType(existingSaleType)) {
+          await syncPendingAuction(pool, {
+            listingId: parseInt(id, 10),
+            startingPrice: price,
+            durationHours: bidDurationHours,
+          });
+        }
       }
 
       // Sync images when the client sends a final image URL list.
@@ -1360,11 +1588,17 @@ router.put('/listings/:id', verifyToken,
 
       res.json({
         message: 'Listing updated successfully',
-        listing: fullListing.rows[0],
+        listing: attachOwnerAuction(fullListing.rows[0]),
         images: imagesResult.rows,
       });
     } catch (error) {
       console.error('Error updating listing:', error);
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({
+          error: error.message,
+          ...(error.code ? { code: error.code } : {}),
+        });
+      }
       res.status(500).json({ error: 'Failed to update listing' });
     }
   }
@@ -1406,6 +1640,8 @@ router.delete('/listings/:id', verifyToken, async (req, res) => {
       return res.status(403).json({ error: 'Not authorized to delete this listing' });
     }
 
+    await assertAuctionNotLive(pool, listingId);
+
     const currentStatus = existing.rows[0].status;
     if (isTerminalListingStatus(currentStatus)) {
       return res.status(409).json({
@@ -1432,6 +1668,12 @@ router.delete('/listings/:id', verifyToken, async (req, res) => {
     res.json({ message: 'Listing deleted successfully', listing: result.rows[0] });
   } catch (error) {
     console.error('Error deleting listing:', error);
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        error: error.message,
+        ...(error.code ? { code: error.code } : {}),
+      });
+    }
     res.status(500).json({ error: 'Failed to delete listing' });
   }
 });

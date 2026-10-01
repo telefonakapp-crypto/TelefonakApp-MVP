@@ -77,7 +77,8 @@ async function freezeCurrentListingRevision(client, listingId, userId) {
        approved_or_rejected_at, moderated_by_admin_id, resubmitted_at,
        previous_listing_id, revision_number, root_listing_id, views, created_at, updated_at,
        category_id, listing_source, custom_brand_name, custom_model_name, custom_storage,
-       custom_color_name, custom_sim_configuration, custom_case_size, custom_connectivity
+       custom_color_name, custom_sim_configuration, custom_case_size, custom_connectivity,
+       sale_type
      )
      SELECT
        user_id, model_id, storage_id, color_id, model_storage_id, model_color_id,
@@ -87,7 +88,8 @@ async function freezeCurrentListingRevision(client, listingId, userId) {
        approved_or_rejected_at, moderated_by_admin_id, resubmitted_at,
        previous_listing_id, revision_number, root_listing_id, views, created_at, updated_at,
        category_id, listing_source, custom_brand_name, custom_model_name, custom_storage,
-       custom_color_name, custom_sim_configuration, custom_case_size, custom_connectivity
+       custom_color_name, custom_sim_configuration, custom_case_size, custom_connectivity,
+       sale_type
      FROM listings
      WHERE id = $1 AND user_id = $2
      RETURNING *`,

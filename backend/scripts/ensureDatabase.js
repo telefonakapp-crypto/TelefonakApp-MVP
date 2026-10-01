@@ -56,6 +56,10 @@ const MIGRATION_FILES = [
   { file: 'custom_listings.sql',              label: 'Custom (Other) listing columns + source check' },
   { file: 'phone_catalog_seed.sql',           label: 'Researched phone catalog (brands/models/storage)' },
   { file: 'user_push_notifications.sql',      label: 'User push preference + Expo device tokens' },
+  { file: 'listing_bidding.sql',              label: 'Listing sale_type + auctions + bids' },
+  { file: 'listing_bid_duration_ended.sql',   label: 'Bid duration ended listing status' },
+  { file: 'listing_list_again.sql',           label: 'List Again source listing + auction completion_source' },
+  { file: 'native_push_tokens.sql',           label: 'Native FCM/APNs device tokens alongside Expo tokens' },
 ];
 
 const REQUIRED_TABLES = [
@@ -91,6 +95,8 @@ const REQUIRED_TABLES = [
   'watch_connectivities',
   'model_watch_connectivities',
   'user_push_tokens',
+  'listing_auctions',
+  'bids',
 ];
 
 const REQUIRED_LISTING_COLUMNS = [
@@ -119,6 +125,8 @@ const REQUIRED_LISTING_COLUMNS = [
   'custom_sim_configuration',
   'custom_case_size',
   'custom_connectivity',
+  'sale_type',
+  'listed_from_listing_id',
 ];
 
 const DATABASE_DIR = path.join(__dirname, '../database');
@@ -319,6 +327,19 @@ async function verifySchema(db) {
     throw new Error(`Missing required listings columns after migration: ${missingCols.join(', ')}`);
   }
   log(`✓ Required listings columns present (${REQUIRED_LISTING_COLUMNS.join(', ')})`);
+
+  log('Verifying listing_auctions.completion_source...');
+  const auctionCols = await db.query(
+    `SELECT column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'listing_auctions'
+       AND column_name = 'completion_source'`
+  );
+  if (auctionCols.rows.length === 0) {
+    throw new Error('Missing required listing_auctions column after migration: completion_source');
+  }
+  log('✓ listing_auctions.completion_source present');
 
   const simCount = await db.query(
     'SELECT COUNT(*)::int AS count FROM sim_configurations WHERE is_active = TRUE'

@@ -15,9 +15,11 @@ const BACKEND_ROOT = path.resolve(__dirname, '..');
 const CUSTOMER = 'test-only-customer-jwt-secret-aaaaaaaa';
 const ADMIN = 'test-only-admin-jwt-secret-bbbbbbbbbbbb';
 const SHARED = 'test-only-shared-jwt-secret-cccccccccc';
-const TWILIO_SID = 'ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const TWILIO_TOKEN = 'test_twilio_auth_token_xx';
-const TWILIO_FROM = '+15005550006';
+const SMS_API_URL = 'https://sms.thecaptainjo.com:8445/websmpp/websms';
+const SMS_USERNAME = 'Telefonak';
+const SMS_PASSWORD = 'test-sms-password-not-real';
+const SMS_SENDER_ID = 'Telefonak';
+const SMS_TYPE = '3';
 
 function baseEnv(overrides) {
   return {
@@ -32,9 +34,11 @@ function baseEnv(overrides) {
     JWT_ADMIN_SECRET: ADMIN,
     JWT_SECRET: SHARED,
     OTP_PEPPER: CUSTOMER,
-    TWILIO_ACCOUNT_SID: TWILIO_SID,
-    TWILIO_AUTH_TOKEN: TWILIO_TOKEN,
-    TWILIO_PHONE_NUMBER: TWILIO_FROM,
+    SMS_API_URL,
+    SMS_USERNAME,
+    SMS_PASSWORD,
+    SMS_SENDER_ID,
+    SMS_TYPE,
     ADMIN_ACCESS_TOKEN_TTL: '8h',
     ...overrides,
   };
@@ -59,7 +63,7 @@ function assertNoSecretLeak(output) {
   assert.equal(output.includes(CUSTOMER), false);
   assert.equal(output.includes(ADMIN), false);
   assert.equal(output.includes(SHARED), false);
-  assert.equal(output.includes(TWILIO_TOKEN), false);
+  assert.equal(output.includes(SMS_PASSWORD), false);
 }
 
 const customerAuthPath = JSON.stringify(path.join(BACKEND_ROOT, 'utils', 'customerAuth.js'));

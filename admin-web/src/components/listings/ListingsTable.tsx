@@ -1,5 +1,10 @@
 import { ListingStatusBadge } from './ListingStatusBadge';
 import type { AdminListingListItem } from '../../types/listing';
+import {
+  auctionStatusLabel,
+  formatAdminMoney,
+  saleTypeLabel,
+} from '../../utils/auctionDisplay';
 
 function formatPrice(price: number | string) {
   const value = typeof price === 'number' ? price : Number(price);
@@ -42,6 +47,8 @@ export function ListingsTable({ items, onView }: ListingsTableProps) {
               <th className="px-4 py-3">Brand</th>
               <th className="px-4 py-3">Model</th>
               <th className="px-4 py-3">Price</th>
+              <th className="px-4 py-3">Sale</th>
+              <th className="px-4 py-3">Auction</th>
               <th className="px-4 py-3">Seller</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Created</th>
@@ -69,6 +76,20 @@ export function ListingsTable({ items, onView }: ListingsTableProps) {
                 <td className="px-4 py-3 font-medium text-slate-900">{listing.brand_name}</td>
                 <td className="px-4 py-3 text-slate-700">{listing.model_name}</td>
                 <td className="px-4 py-3 text-slate-700">{formatPrice(listing.price)}</td>
+                <td className="px-4 py-3">
+                  <span
+                    className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                      listing.sale_type === 'bid'
+                        ? 'bg-indigo-50 text-indigo-800'
+                        : 'bg-slate-100 text-slate-700'
+                    }`}
+                  >
+                    {saleTypeLabel(listing.sale_type)}
+                  </span>
+                </td>
+                <td className="px-4 py-3">
+                  <AuctionCell listing={listing} />
+                </td>
                 <td className="px-4 py-3 text-slate-700">{listing.seller_name}</td>
                 <td className="px-4 py-3">
                   <ListingStatusBadge status={listing.status} />
@@ -98,6 +119,29 @@ export function ListingsTable({ items, onView }: ListingsTableProps) {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+}
+
+function AuctionCell({ listing }: { listing: AdminListingListItem }) {
+  if (listing.sale_type !== 'bid') {
+    return <span className="text-slate-400">—</span>;
+  }
+  const auction = listing.auction;
+  if (!auction) {
+    return <span className="text-xs text-slate-500">No auction</span>;
+  }
+  const highest = formatAdminMoney(auction.current_highest_bid);
+  return (
+    <div className="min-w-[9rem]">
+      <p className="text-sm font-medium text-slate-900">{auctionStatusLabel(auction.auction_status)}</p>
+      <p className="mt-0.5 text-xs text-slate-500">
+        Start {formatAdminMoney(auction.starting_price) || '—'}
+        {' · '}
+        High {highest || '—'}
+        {' · '}
+        {auction.bid_count} {auction.bid_count === 1 ? 'bid' : 'bids'}
+      </p>
     </div>
   );
 }

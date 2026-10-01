@@ -15,7 +15,7 @@
     "generate:watch-attributes": "node scripts/generateSmartwatchAttributesSql.js",
     "create-super-admin": "node scripts/create-super-admin.js",
     "test:security": "node security-tests/run.js",
-    "test:env": "node --test config/env.test.js utils/otp.h4.test.js utils/otp.bypass.test.js utils/adminToken.test.js utils/jwtIssAud.test.js utils/userColumns.test.js utils/rateLimitIdentity.test.js routes/listings.ownership.sql.test.js utils/imageContent.test.js utils/adminImageUpload.test.js"
+    "test:env": "node --test config/env.test.js utils/otp.h4.test.js utils/otp.bypass.test.js utils/smsProvider.test.js utils/adminToken.test.js utils/jwtIssAud.test.js utils/userColumns.test.js utils/rateLimitIdentity.test.js routes/listings.ownership.sql.test.js utils/imageContent.test.js utils/adminImageUpload.test.js utils/userDemographics.test.js utils/listingAuctions.test.js utils/listingAuctionSummary.test.js utils/firebaseAdmin.test.js utils/pushDelivery.fcm.test.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -24,11 +24,11 @@
     "express": "^4.18.2",
     "express-rate-limit": "^8.6.1",
     "express-validator": "^7.0.1",
+    "firebase-admin": "^14.5.0",
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.2",
     "multer": "^1.4.5-lts.1",
-    "pg": "^8.11.3",
-    "twilio": "^4.19.0"
+    "pg": "^8.11.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
